@@ -40,7 +40,7 @@ muda = "0.15"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 # HTTP client for image loading
-isahc = { version = "1.7", features = ["text-decoding"] }
+isahc = { version = "1.7", default-features = false, features = ["text-decoding"] }
 bytes = "1.5"
 http-body-util = "0.1"
 
