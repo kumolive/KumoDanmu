@@ -1,6 +1,6 @@
 //! Application entry point
 
-use crate::http::ReqwestHttpClient;
+use crate::http::IsahcHttpClient;
 use crate::theme::update_gpui_component_theme;
 use crate::tray::{TrayCommand, TrayManager};
 use crate::views::MainView;
@@ -153,7 +153,7 @@ pub fn run_app_with_plugins(
         update_gpui_component_theme(cx);
 
         // Setup HTTP client for loading remote images
-        if let Ok(http_client) = ReqwestHttpClient::new() {
+        if let Ok(http_client) = IsahcHttpClient::new() {
             cx.set_http_client(http_client);
         }
 
@@ -239,7 +239,7 @@ pub fn run_app_with_tray(
         update_gpui_component_theme(cx);
 
         // Setup HTTP client for loading remote images
-        if let Ok(http_client) = ReqwestHttpClient::new() {
+        if let Ok(http_client) = IsahcHttpClient::new() {
             cx.set_http_client(http_client);
         }
 

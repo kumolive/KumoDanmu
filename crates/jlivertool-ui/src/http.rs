@@ -1,9 +1,10 @@
-//! HTTP client adapter for GPUI using reqwest with image caching
+//! HTTP client adapter for GPUI using isahc with image caching
 
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use gpui::http_client::{AsyncBody, HttpClient, Request, Response, Url};
 use http_body_util::BodyExt;
+use isahc::prelude::*;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -53,9 +54,7 @@ impl ImageCache {
         // If still full, remove oldest entries
         if self.entries.len() >= self.max_size {
             // Remove ~25% of entries (oldest first by expiration)
-            let mut entries_vec: Vec<_> = self
-                .entries
-                .iter()
+            let mut entries_vec: Vec<_> = self.entries.iter()
                 .map(|(k, v)| (k.clone(), v.expires_at))
                 .collect();
             entries_vec.sort_by_key(|(_, exp)| *exp);
@@ -75,26 +74,26 @@ impl ImageCache {
     }
 }
 
-/// HTTP client implementation using reqwest with image caching
-pub struct ReqwestHttpClient {
-    client: reqwest::Client,
+/// HTTP client implementation using isahc with image caching
+pub struct IsahcHttpClient {
+    client: isahc::HttpClient,
     user_agent: gpui::http_client::http::HeaderValue,
     cache: Arc<RwLock<ImageCache>>,
     cache_ttl: Duration,
 }
 
-impl ReqwestHttpClient {
+impl IsahcHttpClient {
     pub fn new() -> anyhow::Result<Arc<Self>> {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .redirect(reqwest::redirect::Policy::limited(10))
+        let client = isahc::HttpClient::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .redirect_policy(isahc::config::RedirectPolicy::Limit(10))
             .build()?;
 
         Ok(Arc::new(Self {
             client,
             user_agent: gpui::http_client::http::HeaderValue::from_static("JLiverTool/0.1"),
             cache: Arc::new(RwLock::new(ImageCache::new(500))), // Cache up to 500 images
-            cache_ttl: Duration::from_secs(30 * 60),             // 30 minutes TTL
+            cache_ttl: Duration::from_secs(30 * 60),  // 30 minutes TTL
         }))
     }
 
@@ -112,9 +111,9 @@ impl ReqwestHttpClient {
     }
 }
 
-impl HttpClient for ReqwestHttpClient {
+impl HttpClient for IsahcHttpClient {
     fn type_name(&self) -> &'static str {
-        "ReqwestHttpClient"
+        "IsahcHttpClient"
     }
 
     fn user_agent(&self) -> Option<&gpui::http_client::http::HeaderValue> {
@@ -159,30 +158,30 @@ impl HttpClient for ReqwestHttpClient {
             // Convert AsyncBody to bytes using BodyExt
             let body_data = body.collect().await?.to_bytes();
 
-            let url = reqwest::Url::parse(parts.uri.to_string().as_str())
-                .map_err(|e| anyhow::anyhow!("invalid request URL: {e}"))?;
+            // Build isahc request
+            let mut isahc_req = isahc::Request::builder()
+                .method(parts.method.as_str())
+                .uri(parts.uri.to_string());
 
-            let mut rb = client.request(parts.method, url);
             for (name, value) in parts.headers.iter() {
-                if let (Ok(name), Ok(value)) = (
-                    reqwest::header::HeaderName::from_bytes(name.as_str().as_bytes()),
-                    reqwest::header::HeaderValue::from_bytes(value.as_bytes()),
-                ) {
-                    rb = rb.header(name, value);
-                }
+                isahc_req = isahc_req.header(name.as_str(), value.to_str().unwrap_or(""));
             }
 
-            let resp = rb.body(body_data.to_vec()).send().await?;
-            let status = resp.status();
-            let headers = resp.headers().clone();
-            let body_bytes = resp.bytes().await?;
+            let isahc_req = isahc_req.body(body_data.to_vec())?;
+
+            // Send request
+            let mut isahc_resp = client.send_async(isahc_req).await?;
+
+            // Read response body
+            let status = isahc_resp.status();
+            let headers = isahc_resp.headers().clone();
+            let body_bytes = isahc_resp.bytes().await?;
             let body_bytes = Bytes::from(body_bytes);
 
             // Cache successful image responses
             if let Some((cache_lock, ttl, cache_url)) = cache {
                 if status.is_success() {
-                    let headers_vec: Vec<(String, String)> = headers
-                        .iter()
+                    let headers_vec: Vec<(String, String)> = headers.iter()
                         .filter_map(|(name, value)| {
                             value.to_str().ok().map(|v| (name.to_string(), v.to_string()))
                         })
