@@ -65,4 +65,4 @@ depends = ["libvulkan1", "libxkbcommon0", "libwayland-client0", "libfontconfig1"
 section = "utils"
 
 [package.metadata.packager.pacman]
-depends = ["vulkan-icd-loader", "libxkbcommon", "wayland", "fontconfig"]
+depends = ["vulkan-icd-loader", "libxkbcommon", "wayland", "fontconfig", "xdotool"]

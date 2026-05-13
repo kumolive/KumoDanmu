@@ -244,6 +244,12 @@ pub fn run_app_with_tray(
         }
 
         // Initialize tray icon AFTER GPUI has initialized (inside the event loop)
+        // On Linux, GTK must be initialized before using tray-icon (which uses libappindicator)
+        #[cfg(target_os = "linux")]
+        {
+            let _ = gtk::init();
+        }
+
         let (tray_manager, tray_command_rx) = match TrayManager::new() {
             Ok((manager, rx)) => {
                 tracing::info!("Tray icon initialized successfully");
