@@ -118,6 +118,11 @@ jobs:
       - name: Generate PKGBUILD for Arch Linux
         run: cargo packager --release -p jlivertool --formats pacman
 
+      - name: Patch PKGBUILD for Arch libxdo.so.4 ABI
+        run: |
+          sed -i '/^options=/a makedepends=(patchelf)' target/release/PKGBUILD
+          sed -i '/cp -r.*srcdir.*pkgdir/a\tpatchelf --replace-needed libxdo.so.3 libxdo.so.4 "${pkgdir}"/usr/bin/jlivertool' target/release/PKGBUILD
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
