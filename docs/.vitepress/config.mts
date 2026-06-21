@@ -9,8 +9,6 @@ export default defineConfig({
     nav: [
       { text: '主页', link: '/' },
       { text: '功能文档', link: '/user-document' },
-      { text: '插件文档', link: '/plugin-document' },
-      { text: '插件列表', link: '/plugin-list' },
     ],
 
     sidebar: [
@@ -26,13 +24,6 @@ export default defineConfig({
         items: [
           { text: '功能文档', link: '/user-document' },
           { text: '常见问题', link: '/qa' },
-        ],
-      },
-      {
-        text: '插件开发',
-        items: [
-          { text: '插件文档', link: '/plugin-document' },
-          { text: '插件列表', link: '/plugin-list' },
         ],
       },
     ],

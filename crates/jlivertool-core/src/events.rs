@@ -135,17 +135,6 @@ pub enum Event {
         page: u32,
     },
 
-    /// Plugins list refreshed
-    PluginsRefreshed {
-        plugins: Vec<PluginInfoEvent>,
-    },
-
-    /// Plugin import result
-    PluginImportResult {
-        success: bool,
-        message: String,
-    },
-
     /// All data cleared
     DataCleared,
 
@@ -163,17 +152,6 @@ pub enum Event {
 
     /// Live stream cut off
     CutOff(CutOffMessage),
-}
-
-/// Plugin info for events (simplified version)
-#[derive(Debug, Clone)]
-pub struct PluginInfoEvent {
-    pub id: String,
-    pub name: String,
-    pub author: String,
-    pub desc: String,
-    pub version: String,
-    pub path: std::path::PathBuf,
 }
 
 /// Event handler callback type
@@ -287,8 +265,6 @@ impl EventBus {
             Event::UserInfoFetched { .. } => "user_info_fetched",
             Event::AudienceListFetched { .. } => "audience_list_fetched",
             Event::GuardListFetched { .. } => "guard_list_fetched",
-            Event::PluginsRefreshed { .. } => "plugins_refreshed",
-            Event::PluginImportResult { .. } => "plugin_import_result",
             Event::DataCleared => "data_cleared",
             Event::UpdateCheckResult { .. } => "update_check_result",
             Event::Warning(_) => "warning",

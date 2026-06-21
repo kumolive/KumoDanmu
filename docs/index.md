@@ -37,8 +37,6 @@ features:
     details: 可以查看本次直播指定观众的发言记录
   - title: 链接识别
     details: 点击直接打开弹幕、醒目留言中的视频 BV 号
-  - title: 插件支持
-    details: 支持插件扩展功能，提供插件开发文档
 ---
 
 ## 软件截图

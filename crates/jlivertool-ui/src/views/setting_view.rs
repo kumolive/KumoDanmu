@@ -28,12 +28,6 @@ type WindowSettingsCallback = Arc<dyn Fn(bool, bool, bool, bool, bool, &mut Wind
 type ThemeCallback = Arc<dyn Fn(String, &mut Window, &mut App) + Send + Sync>;
 /// Type alias for TTS enabled callback (3 bool parameters: danmu, gift, superchat)
 type TtsEnabledCallback = Arc<dyn Fn(bool, bool, bool, &mut Window, &mut App) + Send + Sync>;
-/// Type alias for plugin open callback (plugin_id, plugin_name, plugin_path)
-type PluginOpenCallback = Arc<dyn Fn(String, String, std::path::PathBuf, &mut Window, &mut App) + Send + Sync>;
-/// Type alias for plugin import callback (github_url parameter)
-type PluginImportCallback = Arc<dyn Fn(String, &mut Window, &mut App) + Send + Sync>;
-/// Type alias for plugin remove callback (plugin_id, plugin_path)
-type PluginRemoveCallback = Arc<dyn Fn(String, std::path::PathBuf, &mut Window, &mut App) + Send + Sync>;
 /// Type alias for advanced settings callback (max_danmu, log_level)
 type AdvancedSettingsCallback = Arc<dyn Fn(usize, String, &mut Window, &mut App) + Send + Sync>;
 /// Type alias for clear data callback
@@ -46,21 +40,6 @@ type RoomTitleCallback = Arc<dyn Fn(u64, String, &mut Window, &mut App) + Send +
 type UpdateCheckCallback = Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>;
 /// Type alias for auto update setting change callback (enabled)
 type AutoUpdateCallback = Arc<dyn Fn(bool, &mut Window, &mut App) + Send + Sync>;
-
-/// Type alias for plugin port change callback (ws_port, http_port)
-type PluginPortCallback = Arc<dyn Fn(u16, u16, &mut Window, &mut App) + Send + Sync>;
-
-/// Plugin info for display in settings
-#[derive(Debug, Clone)]
-pub struct PluginInfo {
-    pub id: String,
-    pub name: String,
-    pub author: String,
-    pub desc: String,
-    pub version: String,
-    pub enabled: bool,
-    pub path: std::path::PathBuf,
-}
 
 /// Settings view state
 pub struct SettingView {
@@ -107,18 +86,6 @@ pub struct SettingView {
     on_tts_enabled_change: Option<TtsEnabledCallback>,
     on_tts_volume_change: Option<FloatCallback>,
     on_tts_test: Option<SimpleCallback>,
-    // Plugin management
-    plugins: Arc<RwLock<Vec<PluginInfo>>>,
-    on_plugin_open: Option<PluginOpenCallback>,
-    on_open_plugins_folder: Option<SimpleCallback>,
-    on_refresh_plugins: Option<SimpleCallback>,
-    on_plugin_import: Option<PluginImportCallback>,
-    on_plugin_remove: Option<PluginRemoveCallback>,
-    plugin_import_status: Arc<RwLock<Option<String>>>,
-    // Plugin server ports (display only, requires restart to change)
-    plugin_ws_port: Arc<RwLock<String>>,
-    plugin_http_port: Arc<RwLock<String>>,
-    on_plugin_port_change: Option<PluginPortCallback>,
     // Advanced settings
     max_danmu_count: Arc<RwLock<usize>>,
     log_level: Arc<RwLock<String>>,
@@ -155,9 +122,8 @@ enum SettingsTab {
     Window = 1,
     Appearance = 2,
     Tts = 3,
-    Plugin = 4,
-    Advanced = 5,
-    About = 6,
+    Advanced = 4,
+    About = 5,
 }
 
 impl SettingsTab {
@@ -167,7 +133,6 @@ impl SettingsTab {
             Self::Window => "窗口设置",
             Self::Appearance => "外观设置",
             Self::Tts => "TTS 设置",
-            Self::Plugin => "插件管理",
             Self::Advanced => "高级设置",
             Self::About => "关于",
         }
@@ -179,7 +144,6 @@ impl SettingsTab {
             Self::Window,
             Self::Appearance,
             Self::Tts,
-            Self::Plugin,
             Self::Advanced,
             Self::About,
         ]
@@ -312,16 +276,6 @@ impl SettingView {
             on_tts_enabled_change: None,
             on_tts_volume_change: None,
             on_tts_test: None,
-            plugins: Arc::new(RwLock::new(Vec::new())),
-            on_plugin_open: None,
-            on_open_plugins_folder: None,
-            on_refresh_plugins: None,
-            on_plugin_import: None,
-            on_plugin_remove: None,
-            plugin_import_status: Arc::new(RwLock::new(None)),
-            plugin_ws_port: Arc::new(RwLock::new("8081".to_string())),
-            plugin_http_port: Arc::new(RwLock::new("8080".to_string())),
-            on_plugin_port_change: None,
             max_danmu_count: Arc::new(RwLock::new(200)),
             log_level: Arc::new(RwLock::new("info".to_string())),
             on_advanced_settings_change: None,
@@ -520,46 +474,6 @@ impl SettingView {
         self.on_tts_test = Some(Arc::new(callback));
     }
 
-    /// Set callback for opening plugin window
-    pub fn on_plugin_open<F>(&mut self, callback: F)
-    where
-        F: Fn(String, String, std::path::PathBuf, &mut Window, &mut App) + Send + Sync + 'static,
-    {
-        self.on_plugin_open = Some(Arc::new(callback));
-    }
-
-    /// Set callback for opening plugins folder
-    pub fn on_open_plugins_folder<F>(&mut self, callback: F)
-    where
-        F: Fn(&mut Window, &mut App) + Send + Sync + 'static,
-    {
-        self.on_open_plugins_folder = Some(Arc::new(callback));
-    }
-
-    /// Set callback for refreshing plugins list
-    pub fn on_refresh_plugins<F>(&mut self, callback: F)
-    where
-        F: Fn(&mut Window, &mut App) + Send + Sync + 'static,
-    {
-        self.on_refresh_plugins = Some(Arc::new(callback));
-    }
-
-    /// Set callback for importing plugin from GitHub
-    pub fn on_plugin_import<F>(&mut self, callback: F)
-    where
-        F: Fn(String, &mut Window, &mut App) + Send + Sync + 'static,
-    {
-        self.on_plugin_import = Some(Arc::new(callback));
-    }
-
-    /// Set callback for removing a plugin
-    pub fn on_plugin_remove<F>(&mut self, callback: F)
-    where
-        F: Fn(String, std::path::PathBuf, &mut Window, &mut App) + Send + Sync + 'static,
-    {
-        self.on_plugin_remove = Some(Arc::new(callback));
-    }
-
     /// Set advanced settings change callback
     pub fn on_advanced_settings_change<F>(&mut self, callback: F)
     where
@@ -616,43 +530,6 @@ impl SettingView {
     pub fn set_advanced_settings(&mut self, max_danmu: usize, log_level: String, cx: &mut Context<Self>) {
         *self.max_danmu_count.write() = max_danmu;
         *self.log_level.write() = log_level;
-        cx.notify();
-    }
-
-    /// Set plugin import status message
-    pub fn set_plugin_import_status(&mut self, status: Option<String>, cx: &mut Context<Self>) {
-        *self.plugin_import_status.write() = status;
-        cx.notify();
-    }
-
-    /// Set the list of plugins
-    pub fn set_plugins(&mut self, plugins: Vec<PluginInfo>, cx: &mut Context<Self>) {
-        *self.plugins.write() = plugins;
-        cx.notify();
-    }
-
-    /// Set the plugin server ports (for display)
-    pub fn set_plugin_ports(&mut self, ws_port: u16, http_port: u16, cx: &mut Context<Self>) {
-        *self.plugin_ws_port.write() = ws_port.to_string();
-        *self.plugin_http_port.write() = http_port.to_string();
-        cx.notify();
-    }
-
-    /// Set callback for plugin port changes
-    pub fn on_plugin_port_change<F>(&mut self, callback: F)
-    where
-        F: Fn(u16, u16, &mut Window, &mut App) + Send + Sync + 'static,
-    {
-        self.on_plugin_port_change = Some(Arc::new(callback));
-    }
-
-    /// Update a plugin's enabled state
-    pub fn set_plugin_enabled(&mut self, plugin_id: &str, enabled: bool, cx: &mut Context<Self>) {
-        let mut plugins = self.plugins.write();
-        if let Some(plugin) = plugins.iter_mut().find(|p| p.id == plugin_id) {
-            plugin.enabled = enabled;
-        }
-        drop(plugins);
         cx.notify();
     }
 
@@ -1637,9 +1514,8 @@ impl SettingView {
             1 => SettingsTab::Window,
             2 => SettingsTab::Appearance,
             3 => SettingsTab::Tts,
-            4 => SettingsTab::Plugin,
-            5 => SettingsTab::Advanced,
-            6 => SettingsTab::About,
+            4 => SettingsTab::Advanced,
+            5 => SettingsTab::About,
             _ => SettingsTab::Basic,
         };
 
@@ -1648,7 +1524,6 @@ impl SettingView {
             SettingsTab::Window => self.render_window_tab(cx).into_any_element(),
             SettingsTab::Appearance => self.render_appearance_tab(window, cx).into_any_element(),
             SettingsTab::Tts => self.render_tts_tab(cx, window).into_any_element(),
-            SettingsTab::Plugin => self.render_plugin_tab(window, cx).into_any_element(),
             SettingsTab::Advanced => self.render_advanced_tab(cx).into_any_element(),
             SettingsTab::About => self.render_about_tab(cx).into_any_element(),
         }
@@ -2515,518 +2390,6 @@ impl SettingView {
                         )),
                 ),
             )
-    }
-
-    fn render_plugin_import_section(
-        &self,
-        on_plugin_import: Option<PluginImportCallback>,
-        plugin_import_status: Option<String>,
-        entity: Entity<Self>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        // Create InputState using keyed state
-        struct PluginImportInputWrapper {
-            input: Entity<gpui_component::input::InputState>,
-        }
-
-        let state = window.use_keyed_state(
-            SharedString::from("plugin-import-input-state"),
-            cx,
-            |window, cx| {
-                let input = cx.new(|cx| {
-                    gpui_component::input::InputState::new(window, cx)
-                        .placeholder("GitHub 插件链接...")
-                });
-                PluginImportInputWrapper { input }
-            },
-        );
-
-        let input_state = state.read(cx).input.clone();
-
-        self.render_section_card(
-            v_flex()
-                .w_full()
-                .child(self.render_section_title("从 GitHub 导入插件"))
-                .child(
-                    v_flex()
-                        .w_full()
-                        .py_2()
-                        .gap_3()
-                        .child(
-                            div()
-                                .text_size(px(12.0))
-                                .text_color(Colors::text_secondary())
-                                .child("输入 GitHub 插件目录链接，例如:"),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.0))
-                                .text_color(Colors::text_muted())
-                                .child("https://github.com/Xinrea/JLiverTool/tree/master/plugins/wordcloud"),
-                        )
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .gap_2()
-                                .items_center()
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .child(gpui_component::input::Input::new(&input_state).cleanable(true)),
-                                )
-                                .child(
-                                    div()
-                                        .id("import-plugin-btn")
-                                        .px_4()
-                                        .py(px(7.0))
-                                        .rounded_md()
-                                        .cursor_pointer()
-                                        .bg(Colors::accent())
-                                        .hover(|s| s.opacity(0.8))
-                                        .text_size(px(13.0))
-                                        .text_color(Colors::button_text())
-                                        .child("导入")
-                                        .on_click({
-                                            let input_state = input_state.clone();
-                                            let callback = on_plugin_import.clone();
-                                            let entity = entity.clone();
-                                            move |_event, window, cx| {
-                                                let url = input_state.read(cx).text().to_string().trim().to_string();
-                                                if !url.is_empty() {
-                                                    // Set importing status
-                                                    entity.update(cx, |this, cx| {
-                                                        this.set_plugin_import_status(Some("正在导入...".to_string()), cx);
-                                                    });
-                                                    if let Some(ref cb) = callback {
-                                                        cb(url, window, cx);
-                                                    }
-                                                }
-                                            }
-                                        }),
-                                ),
-                        )
-                        .when(plugin_import_status.is_some(), |this| {
-                            let status = plugin_import_status.clone().unwrap();
-                            let is_error = status.contains("失败") || status.contains("错误");
-                            this.child(
-                                div()
-                                    .text_size(px(12.0))
-                                    .text_color(if is_error { Colors::error() } else { Colors::success() })
-                                    .child(status),
-                            )
-                        }),
-                ),
-        )
-    }
-
-    fn render_plugin_tab(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let plugins = self.plugins.read().clone();
-        let on_plugin_open = self.on_plugin_open.clone();
-        let on_plugin_remove = self.on_plugin_remove.clone();
-        let on_open_plugins_folder = self.on_open_plugins_folder.clone();
-        let on_refresh_plugins = self.on_refresh_plugins.clone();
-        let on_plugin_import = self.on_plugin_import.clone();
-        let plugin_import_status = self.plugin_import_status.read().clone();
-        let entity = cx.entity().clone();
-
-        v_flex()
-            .w_full()
-            .p_6()
-            .gap_4()
-            // GitHub Import Section
-            .child(
-                self.render_plugin_import_section(on_plugin_import, plugin_import_status, entity, window, cx),
-            )
-            .child(
-                self.render_section_card(
-                    v_flex()
-                        .w_full()
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .justify_between()
-                                .items_center()
-                                .child(self.render_section_title("已安装插件"))
-                                .child(
-                                    div()
-                                        .id("refresh-plugins-btn")
-                                        .px_2()
-                                        .py_1()
-                                        .rounded(px(4.0))
-                                        .cursor_pointer()
-                                        .text_size(px(11.0))
-                                        .text_color(Colors::text_secondary())
-                                        .hover(|s| s.bg(Colors::bg_hover()))
-                                        .child("刷新")
-                                        .on_click({
-                                            let callback = on_refresh_plugins.clone();
-                                            move |_event, window, cx| {
-                                                if let Some(ref cb) = callback {
-                                                    cb(window, cx);
-                                                }
-                                            }
-                                        }),
-                                ),
-                        )
-                        .child(
-                            v_flex()
-                                .w_full()
-                                .py_2()
-                                .gap_3()
-                                .when(plugins.is_empty(), |this| {
-                                    this.child(
-                                        div()
-                                            .w_full()
-                                            .py_8()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .child(
-                                                v_flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .child(
-                                                        div()
-                                                            .text_size(px(14.0))
-                                                            .text_color(Colors::text_muted())
-                                                            .child("暂无已安装的插件"),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .text_size(px(12.0))
-                                                            .text_color(Colors::text_muted())
-                                                            .child("将插件文件夹放入 plugins 目录后重启应用"),
-                                                    ),
-                                            ),
-                                    )
-                                })
-                                .children(plugins.iter().map(|plugin| {
-                                    let plugin_id = plugin.id.clone();
-                                    let plugin_name = plugin.name.clone();
-                                    let plugin_path = plugin.path.clone();
-                                    let on_open = on_plugin_open.clone();
-                                    let on_remove = on_plugin_remove.clone();
-
-                                    div()
-                                        .w_full()
-                                        .p_4()
-                                        .rounded(px(8.0))
-                                        .bg(Colors::bg_secondary())
-                                        .child(
-                                            h_flex()
-                                                .w_full()
-                                                .justify_between()
-                                                .items_start()
-                                                .child(
-                                                    v_flex()
-                                                        .flex_1()
-                                                        .gap_1()
-                                                        .child(
-                                                            h_flex()
-                                                                .gap_2()
-                                                                .items_center()
-                                                                .child(
-                                                                    div()
-                                                                        .text_size(px(14.0))
-                                                                        .font_weight(FontWeight::MEDIUM)
-                                                                        .text_color(Colors::text_primary())
-                                                                        .child(plugin.name.clone()),
-                                                                )
-                                                                .child(
-                                                                    div()
-                                                                        .px_2()
-                                                                        .py(px(2.0))
-                                                                        .rounded(px(4.0))
-                                                                        .bg(Colors::accent().opacity(0.1))
-                                                                        .text_size(px(10.0))
-                                                                        .text_color(Colors::accent())
-                                                                        .child(format!("v{}", plugin.version)),
-                                                                ),
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .text_size(px(12.0))
-                                                                .text_color(Colors::text_muted())
-                                                                .child(plugin.desc.clone()),
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .text_size(px(11.0))
-                                                                .text_color(Colors::text_muted())
-                                                                .child(format!("作者: {}", plugin.author)),
-                                                        ),
-                                                )
-                                                .child(
-                                                    h_flex()
-                                                        .gap_2()
-                                                        .items_center()
-                                                        .child(
-                                                            div()
-                                                                .id(SharedString::from(format!("plugin-open-{}", plugin_id.clone())))
-                                                                .px_3()
-                                                                .py(px(6.0))
-                                                                .rounded(px(4.0))
-                                                                .cursor_pointer()
-                                                                .bg(Colors::accent())
-                                                                .text_size(px(12.0))
-                                                                .text_color(Colors::bg_primary())
-                                                                .hover(|s| s.bg(Colors::accent().opacity(0.8)))
-                                                                .child("打开")
-                                                                .on_click({
-                                                                    let plugin_id = plugin_id.clone();
-                                                                    let plugin_name = plugin_name.clone();
-                                                                    let plugin_path = plugin_path.clone();
-                                                                    move |_event, window, cx| {
-                                                                        if let Some(ref callback) = on_open {
-                                                                            callback(plugin_id.clone(), plugin_name.clone(), plugin_path.clone(), window, cx);
-                                                                        }
-                                                                    }
-                                                                }),
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .id(SharedString::from(format!("plugin-remove-{}", plugin_id.clone())))
-                                                                .px_3()
-                                                                .py(px(6.0))
-                                                                .rounded(px(4.0))
-                                                                .cursor_pointer()
-                                                                .bg(gpui::transparent_black())
-                                                                .border_1()
-                                                                .border_color(Colors::error().opacity(0.5))
-                                                                .text_size(px(12.0))
-                                                                .text_color(Colors::error())
-                                                                .hover(|s| s.bg(Colors::error().opacity(0.1)))
-                                                                .child("删除")
-                                                                .on_click({
-                                                                    let plugin_id = plugin_id.clone();
-                                                                    let plugin_path = plugin_path.clone();
-                                                                    move |_event, window, cx| {
-                                                                        if let Some(ref callback) = on_remove {
-                                                                            callback(plugin_id.clone(), plugin_path.clone(), window, cx);
-                                                                        }
-                                                                    }
-                                                                }),
-                                                        ),
-                                                ),
-                                        )
-                                })),
-                        ),
-                ),
-            )
-            .child(
-                self.render_section_card(
-                    v_flex()
-                        .w_full()
-                        .child(self.render_section_title("插件说明"))
-                        .child(
-                            v_flex()
-                                .w_full()
-                                .py_2()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_size(px(12.0))
-                                        .text_color(Colors::text_secondary())
-                                        .child("插件是基于 HTML/JavaScript 的扩展，可以订阅弹幕、礼物等事件。"),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(12.0))
-                                        .text_color(Colors::text_secondary())
-                                        .child("每个插件需要包含 meta.json 配置文件和入口 HTML 文件。"),
-                                )
-                                .child(
-                                    div()
-                                        .pt_2()
-                                        .child(
-                                            div()
-                                                .id("open-plugins-folder-btn")
-                                                .px_3()
-                                                .py(px(6.0))
-                                                .rounded(px(4.0))
-                                                .cursor_pointer()
-                                                .bg(Colors::bg_hover())
-                                                .text_size(px(12.0))
-                                                .text_color(Colors::text_primary())
-                                                .hover(|s| s.bg(Colors::accent().opacity(0.2)))
-                                                .child("打开插件目录")
-                                                .on_click({
-                                                    let callback = on_open_plugins_folder.clone();
-                                                    move |_event, window, cx| {
-                                                        if let Some(ref cb) = callback {
-                                                            cb(window, cx);
-                                                        }
-                                                    }
-                                                }),
-                                        ),
-                                ),
-                        ),
-                ),
-            )
-            // Server ports section
-            .child({
-                let ws_port = self.plugin_ws_port.clone();
-                let http_port = self.plugin_http_port.clone();
-                let on_port_change = self.on_plugin_port_change.clone();
-                let ws_port_value = self.plugin_ws_port.read().clone();
-                let http_port_value = self.plugin_http_port.read().clone();
-
-                // Create input states for port inputs
-                struct WsPortInputWrapper {
-                    input: Entity<gpui_component::input::InputState>,
-                }
-                struct HttpPortInputWrapper {
-                    input: Entity<gpui_component::input::InputState>,
-                }
-
-                let ws_input_state = window.use_keyed_state(
-                    SharedString::from("ws-port-input-state"),
-                    cx,
-                    |window, cx| {
-                        let input = cx.new(|cx| {
-                            gpui_component::input::InputState::new(window, cx)
-                                .placeholder("8081")
-                                .default_value(ws_port_value.clone())
-                        });
-                        WsPortInputWrapper { input }
-                    },
-                );
-
-                let http_input_state = window.use_keyed_state(
-                    SharedString::from("http-port-input-state"),
-                    cx,
-                    |window, cx| {
-                        let input = cx.new(|cx| {
-                            gpui_component::input::InputState::new(window, cx)
-                                .placeholder("8080")
-                                .default_value(http_port_value.clone())
-                        });
-                        HttpPortInputWrapper { input }
-                    },
-                );
-
-                let ws_input = ws_input_state.read(cx).input.clone();
-                let http_input = http_input_state.read(cx).input.clone();
-
-                self.render_section_card(
-                    v_flex()
-                        .w_full()
-                        .child(self.render_section_title("服务端口"))
-                        .child(
-                            v_flex()
-                                .w_full()
-                                .py_2()
-                                .gap_3()
-                                .child(
-                                    h_flex()
-                                        .w_full()
-                                        .justify_between()
-                                        .items_center()
-                                        .child(
-                                            div()
-                                                .text_size(px(13.0))
-                                                .text_color(Colors::text_secondary())
-                                                .child("HTTP 端口"),
-                                        )
-                                        .child(
-                                            div()
-                                                .w(px(100.0))
-                                                .child(gpui_component::input::Input::new(&http_input)),
-                                        ),
-                                )
-                                .child(
-                                    h_flex()
-                                        .w_full()
-                                        .justify_between()
-                                        .items_center()
-                                        .child(
-                                            div()
-                                                .text_size(px(13.0))
-                                                .text_color(Colors::text_secondary())
-                                                .child("WebSocket 端口"),
-                                        )
-                                        .child(
-                                            div()
-                                                .w(px(100.0))
-                                                .child(gpui_component::input::Input::new(&ws_input)),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .pt_2()
-                                        .text_size(px(11.0))
-                                        .text_color(Colors::text_muted())
-                                        .child("修改端口后需重启应用生效。默认端口: HTTP 8080, WS 8081"),
-                                )
-                                .child(
-                                    h_flex()
-                                        .pt_3()
-                                        .gap_2()
-                                        .child({
-                                            let ws_input = ws_input.clone();
-                                            let http_input = http_input.clone();
-                                            let ws_port = ws_port.clone();
-                                            let http_port = http_port.clone();
-                                            let callback = on_port_change.clone();
-                                            div()
-                                                .id("save-ports-btn")
-                                                .px_4()
-                                                .py(px(7.0))
-                                                .rounded_md()
-                                                .cursor_pointer()
-                                                .bg(Colors::accent())
-                                                .hover(|s| s.opacity(0.8))
-                                                .text_size(px(13.0))
-                                                .text_color(gpui::white())
-                                                .child("保存")
-                                                .on_click(move |_event, window, cx| {
-                                                    let ws_value = ws_input.read(cx).value().to_string();
-                                                    let http_value = http_input.read(cx).value().to_string();
-
-                                                    // Parse ports
-                                                    let ws_port_num = ws_value.parse::<u16>().unwrap_or(8081);
-                                                    let http_port_num = http_value.parse::<u16>().unwrap_or(8080);
-
-                                                    // Update state
-                                                    *ws_port.write() = ws_port_num.to_string();
-                                                    *http_port.write() = http_port_num.to_string();
-
-                                                    // Call callback to save
-                                                    if let Some(ref cb) = callback {
-                                                        cb(ws_port_num, http_port_num, window, cx);
-                                                    }
-                                                    cx.refresh_windows();
-                                                })
-                                        })
-                                        .child({
-                                            let ws_input = ws_input.clone();
-                                            let http_input = http_input.clone();
-                                            div()
-                                                .id("reset-ports-btn")
-                                                .px_4()
-                                                .py(px(7.0))
-                                                .rounded_md()
-                                                .cursor_pointer()
-                                                .bg(Colors::bg_hover())
-                                                .text_size(px(13.0))
-                                                .text_color(Colors::text_primary())
-                                                .hover(|s| s.bg(Colors::accent().opacity(0.2)))
-                                                .child("重置")
-                                                .on_click(move |_event, window, cx| {
-                                                    ws_input.update(cx, |state, cx| {
-                                                        state.set_value("8081", window, cx);
-                                                    });
-                                                    http_input.update(cx, |state, cx| {
-                                                        state.set_value("8080", window, cx);
-                                                    });
-                                                    cx.refresh_windows();
-                                                })
-                                        }),
-                                ),
-                        ),
-                )
-            })
     }
 
     fn render_advanced_tab(&mut self, cx: &mut Context<Self>) -> impl IntoElement {

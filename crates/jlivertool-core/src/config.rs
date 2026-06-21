@@ -137,9 +137,6 @@ pub struct Config {
     pub font_size: f32,
 
     #[serde(default)]
-    pub plugin_list: Vec<String>,
-
-    #[serde(default)]
     pub windows: HashMap<String, WindowConfig>,
 
     #[serde(default = "default_log_level")]
@@ -178,12 +175,6 @@ pub struct Config {
     #[serde(default = "default_auto_update_check")]
     pub auto_update_check: bool,
 
-    #[serde(default = "default_plugin_ws_port")]
-    pub plugin_ws_port: u16,
-
-    #[serde(default = "default_plugin_http_port")]
-    pub plugin_http_port: u16,
-
     // Extra fields for extensibility
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -191,14 +182,6 @@ pub struct Config {
 
 fn default_auto_update_check() -> bool {
     true
-}
-
-fn default_plugin_ws_port() -> u16 {
-    8081
-}
-
-fn default_plugin_http_port() -> u16 {
-    8080
 }
 
 fn default_max_detail_entry() -> usize {
@@ -252,7 +235,6 @@ impl Default for Config {
             interact_display: false,
             theme: default_theme(),
             font_size: default_font_size(),
-            plugin_list: Vec::new(),
             windows: HashMap::new(),
             log_level: default_log_level(),
             max_danmu_count: default_max_danmu_count(),
@@ -266,8 +248,6 @@ impl Default for Config {
             tts_sc_enabled: false,
             tts_volume: default_tts_volume(),
             auto_update_check: default_auto_update_check(),
-            plugin_ws_port: default_plugin_ws_port(),
-            plugin_http_port: default_plugin_http_port(),
             extra: HashMap::new(),
         }
     }
@@ -559,11 +539,6 @@ impl ConfigStore {
     /// Get merge rooms
     pub fn get_merge_rooms(&self) -> Vec<RoomId> {
         self.inner.config.read().merge_rooms.clone()
-    }
-
-    /// Get plugin list
-    pub fn get_plugin_list(&self) -> Vec<String> {
-        self.inner.config.read().plugin_list.clone()
     }
 
     /// Get the data directory path

@@ -17,8 +17,7 @@ use jlivertool_core::messages::{
 };
 use jlivertool_core::tts::{TtsEnabled, TtsManager, TtsMessage};
 use jlivertool_core::types::RoomId;
-use jlivertool_plugin::PluginManager;
-use jlivertool_ui::{run_app_with_tray, PluginInfo, UiCommand};
+use jlivertool_ui::{run_app_with_tray, UiCommand};
 use notify_rust::Notification;
 use parking_lot::RwLock;
 use std::path::PathBuf;
@@ -50,8 +49,7 @@ fn init_logging(data_dir: &PathBuf) -> Result<tracing_appender::non_blocking::Wo
     let env_filter = EnvFilter::from_default_env()
         .add_directive("jlivertool=info".parse()?)
         .add_directive("jlivertool_core=info".parse()?)
-        .add_directive("jlivertool_ui=info".parse()?)
-        .add_directive("jlivertool_plugin=info".parse()?);
+        .add_directive("jlivertool_ui=info".parse()?);
 
     tracing_subscriber::registry()
         .with(env_filter)
@@ -72,12 +70,10 @@ enum BackendCommand {
 }
 
 /// Event sender wrapper that sets a flag when events are sent
-/// Also broadcasts events to plugins if a plugin event sender is set
 #[derive(Clone)]
 struct EventSender {
     tx: mpsc::Sender<Event>,
     has_events: Arc<AtomicBool>,
-    plugin_tx: Option<tokio::sync::broadcast::Sender<jlivertool_plugin::PluginEvent>>,
 }
 
 impl EventSender {
@@ -85,26 +81,10 @@ impl EventSender {
         Self {
             tx,
             has_events,
-            plugin_tx: None,
         }
-    }
-
-    fn with_plugin_sender(
-        mut self,
-        plugin_tx: tokio::sync::broadcast::Sender<jlivertool_plugin::PluginEvent>,
-    ) -> Self {
-        self.plugin_tx = Some(plugin_tx);
-        self
     }
 
     fn send(&self, event: Event) -> Result<(), mpsc::SendError<Event>> {
-        // Broadcast to plugins if sender is available
-        if let Some(ref plugin_tx) = self.plugin_tx {
-            if let Some(plugin_event) = jlivertool_plugin::PluginEvent::from_core_event(&event) {
-                let _ = plugin_tx.send(plugin_event);
-            }
-        }
-
         let result = self.tx.send(event);
         if result.is_ok() {
             self.has_events.store(true, Ordering::Relaxed);
@@ -139,132 +119,8 @@ fn main() -> Result<()> {
     let config = Arc::new(RwLock::new(ConfigStore::new()?));
     let api = Arc::new(RwLock::new(BiliApi::new()?));
 
-    // Initialize plugin manager (note: plugins are loaded but webview windows
-    // need to be created separately due to thread safety constraints)
-    let plugin_manager = Arc::new(parking_lot::Mutex::new(PluginManager::new()));
-    let plugins_dir = config.read().data_dir().join("plugins");
-
-    match plugin_manager.lock().scan_plugins_dir(&plugins_dir) {
-        Ok(loaded) => {
-            if !loaded.is_empty() {
-                info!("Loaded {} plugins: {:?}", loaded.len(), loaded);
-            }
-        }
-        Err(e) => {
-            warn!("Failed to scan plugins directory: {}", e);
-        }
-    }
-    // Convert plugins to UI-compatible format
-    let ui_plugins: Vec<PluginInfo> = plugin_manager
-        .lock()
-        .get_plugins_with_paths()
-        .into_iter()
-        .map(|(meta, path)| PluginInfo {
-            id: meta.id,
-            name: meta.name,
-            author: meta.author,
-            desc: meta.desc,
-            version: meta.version,
-            enabled: true, // All loaded plugins are enabled by default
-            path,
-        })
-        .collect();
-
-    // Start WebSocket server for plugin communication (always start, even if no plugins yet)
-    // Get configured ports from config
-    let (configured_ws_port, configured_http_port) = {
-        let cfg = config.read().get_config();
-        (cfg.plugin_ws_port, cfg.plugin_http_port)
-    };
-
-    let (ws_port, http_port, plugin_event_tx) = {
-        let plugin_manager_clone = plugin_manager.clone();
-        let plugins_dir_clone = plugins_dir.clone();
-        let (port_tx, port_rx) = std::sync::mpsc::channel::<
-            Option<(
-                u16,
-                u16,
-                tokio::sync::broadcast::Sender<jlivertool_plugin::PluginEvent>,
-            )>,
-        >();
-        std::thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to create tokio runtime for plugin WS server");
-
-            runtime.block_on(async move {
-                // Start the WebSocket server on configured port
-                let ws_result = {
-                    let mut pm = plugin_manager_clone.lock();
-                    pm.start_ws_server_on_port(configured_ws_port).await
-                };
-
-                let ws_port = match ws_result {
-                    Ok(port) => {
-                        info!("Plugin WebSocket server started on port {}", port);
-                        port
-                    }
-                    Err(e) => {
-                        error!("Failed to start plugin WebSocket server: {}", e);
-                        let _ = port_tx.send(None);
-                        return;
-                    }
-                };
-
-                // Start the HTTP server on configured port
-                let http_result = {
-                    let mut pm = plugin_manager_clone.lock();
-                    pm.start_http_server_on_port(plugins_dir_clone, configured_http_port)
-                        .await
-                };
-
-                let http_port = match http_result {
-                    Ok(port) => {
-                        info!("Plugin HTTP server started on port {}", port);
-                        port
-                    }
-                    Err(e) => {
-                        error!("Failed to start plugin HTTP server: {}", e);
-                        let _ = port_tx.send(None);
-                        return;
-                    }
-                };
-
-                // Get the event sender
-                let event_sender = {
-                    let pm = plugin_manager_clone.lock();
-                    pm.get_event_sender()
-                };
-
-                if let Some(sender) = event_sender {
-                    let _ = port_tx.send(Some((ws_port, http_port, sender)));
-                } else {
-                    let _ = port_tx.send(None);
-                }
-
-                // Keep the runtime alive to maintain the servers
-                loop {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
-                }
-            });
-        });
-        // Wait for the ports and event sender to be available
-        match port_rx.recv().unwrap_or(None) {
-            Some((ws_port, http_port, sender)) => (Some(ws_port), Some(http_port), Some(sender)),
-            None => (None, None, None),
-        }
-    };
-
-    // Create event sender with optional plugin broadcasting
-    let event_sender = {
-        let sender = EventSender::new(event_tx.clone(), has_events.clone());
-        if let Some(plugin_tx) = plugin_event_tx {
-            sender.with_plugin_sender(plugin_tx)
-        } else {
-            sender
-        }
-    };
+    // Create event sender
+    let event_sender = EventSender::new(event_tx.clone(), has_events.clone());
 
     // Initialize database
     let db_path = config.read().data_dir().join("jlivertool.db");
@@ -329,7 +185,6 @@ fn main() -> Result<()> {
     let config_clone = config.clone();
     let api_clone = api.clone();
     let tts_clone = tts_manager.clone();
-    let plugin_manager_clone = plugin_manager.clone();
     let db_clone_for_commands = database.clone();
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -344,7 +199,6 @@ fn main() -> Result<()> {
                 config_clone,
                 api_clone,
                 tts_clone,
-                plugin_manager_clone,
                 db_clone_for_commands,
                 backend_cmd_tx,
             )
@@ -432,9 +286,6 @@ fn main() -> Result<()> {
         Some(database),
         Some(config),
         has_events,
-        ui_plugins,
-        ws_port,
-        http_port,
     );
 
     Ok(())
@@ -507,7 +358,6 @@ async fn handle_commands(
     config: Arc<RwLock<ConfigStore>>,
     api: Arc<RwLock<BiliApi>>,
     tts_manager: Arc<TtsManager>,
-    plugin_manager: Arc<parking_lot::Mutex<PluginManager>>,
     database: Arc<Database>,
     backend_cmd_tx: tokio_mpsc::UnboundedSender<BackendCommand>,
 ) {
@@ -888,143 +738,6 @@ async fn handle_commands(
                 info!("Testing TTS");
                 tts_manager.test();
             }
-            UiCommand::RefreshPlugins => {
-                info!("Refreshing plugins list");
-                let plugins_dir = config.read().data_dir().join("plugins");
-                info!("Plugins directory: {:?}", plugins_dir);
-
-                // Rescan plugins directory
-                let pm = plugin_manager.lock();
-                // Clear existing plugins and rescan
-                pm.clear_plugins();
-                match pm.scan_plugins_dir(&plugins_dir) {
-                    Ok(loaded) => {
-                        info!("Refreshed plugins: {:?}", loaded);
-                    }
-                    Err(e) => {
-                        warn!("Failed to scan plugins directory: {}", e);
-                    }
-                }
-
-                // Send updated plugin list to UI
-                let plugin_events: Vec<jlivertool_core::events::PluginInfoEvent> = pm
-                    .get_plugins_with_paths()
-                    .into_iter()
-                    .map(|(meta, path)| jlivertool_core::events::PluginInfoEvent {
-                        id: meta.id,
-                        name: meta.name,
-                        author: meta.author,
-                        desc: meta.desc,
-                        version: meta.version,
-                        path,
-                    })
-                    .collect();
-                info!("Sending {} plugins to UI", plugin_events.len());
-
-                let _ = event_tx.send(Event::PluginsRefreshed {
-                    plugins: plugin_events,
-                });
-            }
-            UiCommand::ImportPlugin(github_url) => {
-                info!("Importing plugin from GitHub: {}", github_url);
-                let plugins_dir = config.read().data_dir().join("plugins");
-                let pm = plugin_manager.clone();
-                let event_tx = event_tx.clone();
-
-                tokio::spawn(async move {
-                    // Download plugin files (this is the async part)
-                    let result = jlivertool_plugin::PluginManager::download_plugin_from_github(
-                        &github_url,
-                        &plugins_dir,
-                    )
-                    .await;
-
-                    match result {
-                        Ok(plugin_dir) => {
-                            // Load the plugin (sync, needs lock)
-                            let load_result = pm.lock().load_plugin(plugin_dir);
-                            match load_result {
-                                Ok(plugin_id) => {
-                                    info!("Successfully imported plugin: {}", plugin_id);
-                                    let _ = event_tx.send(Event::PluginImportResult {
-                                        success: true,
-                                        message: format!("插件 {} 导入成功", plugin_id),
-                                    });
-
-                                    // Refresh plugins list
-                                    let pm = pm.lock();
-                                    let plugin_events: Vec<
-                                        jlivertool_core::events::PluginInfoEvent,
-                                    > = pm
-                                        .get_plugins_with_paths()
-                                        .into_iter()
-                                        .map(|(meta, path)| {
-                                            jlivertool_core::events::PluginInfoEvent {
-                                                id: meta.id,
-                                                name: meta.name,
-                                                author: meta.author,
-                                                desc: meta.desc,
-                                                version: meta.version,
-                                                path,
-                                            }
-                                        })
-                                        .collect();
-                                    let _ = event_tx.send(Event::PluginsRefreshed {
-                                        plugins: plugin_events,
-                                    });
-                                }
-                                Err(e) => {
-                                    error!("Failed to load plugin: {}", e);
-                                    let _ = event_tx.send(Event::PluginImportResult {
-                                        success: false,
-                                        message: format!("加载插件失败: {}", e),
-                                    });
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to download plugin: {}", e);
-                            let _ = event_tx.send(Event::PluginImportResult {
-                                success: false,
-                                message: format!("下载失败: {}", e),
-                            });
-                        }
-                    }
-                });
-            }
-            UiCommand::RemovePlugin {
-                plugin_id,
-                plugin_path,
-            } => {
-                info!("Removing plugin: {} at {:?}", plugin_id, plugin_path);
-                let pm = plugin_manager.lock();
-
-                match pm.remove_plugin(&plugin_id, &plugin_path) {
-                    Ok(()) => {
-                        info!("Successfully removed plugin: {}", plugin_id);
-
-                        // Send updated plugin list to UI
-                        let plugin_events: Vec<jlivertool_core::events::PluginInfoEvent> = pm
-                            .get_plugins_with_paths()
-                            .into_iter()
-                            .map(|(meta, path)| jlivertool_core::events::PluginInfoEvent {
-                                id: meta.id,
-                                name: meta.name,
-                                author: meta.author,
-                                desc: meta.desc,
-                                version: meta.version,
-                                path,
-                            })
-                            .collect();
-                        let _ = event_tx.send(Event::PluginsRefreshed {
-                            plugins: plugin_events,
-                        });
-                    }
-                    Err(e) => {
-                        error!("Failed to remove plugin: {}", e);
-                    }
-                }
-            }
             UiCommand::UpdateAdvancedSettings {
                 max_danmu,
                 log_level,
@@ -1107,15 +820,6 @@ async fn handle_commands(
                 info!("Updating auto update check setting: {}", enabled);
                 if let Err(e) = config.write().set("auto_update_check", enabled) {
                     error!("Failed to save auto_update_check: {}", e);
-                }
-            }
-            UiCommand::UpdatePluginPorts { ws_port, http_port } => {
-                info!("Updating plugin ports: WS={}, HTTP={}", ws_port, http_port);
-                if let Err(e) = config.write().set("plugin_ws_port", ws_port) {
-                    error!("Failed to save plugin_ws_port: {}", e);
-                }
-                if let Err(e) = config.write().set("plugin_http_port", http_port) {
-                    error!("Failed to save plugin_http_port: {}", e);
                 }
             }
         }

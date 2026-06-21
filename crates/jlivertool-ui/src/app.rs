@@ -75,15 +75,6 @@ pub enum UiCommand {
     UpdateTtsProvider(String),
     /// Test TTS
     TestTts,
-    /// Refresh plugins list
-    RefreshPlugins,
-    /// Import plugin from GitHub URL
-    ImportPlugin(String),
-    /// Remove a plugin by ID and path
-    RemovePlugin {
-        plugin_id: String,
-        plugin_path: std::path::PathBuf,
-    },
     /// Update advanced settings (max danmu count, log level)
     UpdateAdvancedSettings { max_danmu: usize, log_level: String },
     /// Clear all data (danmu, gifts, superchats)
@@ -94,8 +85,6 @@ pub enum UiCommand {
     CheckForUpdate,
     /// Update auto-update check setting
     UpdateAutoUpdateCheck(bool),
-    /// Update plugin server ports
-    UpdatePluginPorts { ws_port: u16, http_port: u16 },
 }
 
 /// Wrapper for event receiver with a flag to indicate pending events
@@ -117,27 +106,6 @@ pub fn run_app(
     database: Option<Arc<Database>>,
     config: Option<Arc<RwLock<ConfigStore>>>,
     has_events: Arc<AtomicBool>,
-) {
-    run_app_with_plugins(
-        event_rx,
-        command_tx,
-        database,
-        config,
-        has_events,
-        Vec::new(),
-        None,
-    );
-}
-
-/// Run the GPUI application with plugin info
-pub fn run_app_with_plugins(
-    event_rx: mpsc::Receiver<Event>,
-    command_tx: mpsc::Sender<UiCommand>,
-    database: Option<Arc<Database>>,
-    config: Option<Arc<RwLock<ConfigStore>>>,
-    has_events: Arc<AtomicBool>,
-    plugins: Vec<crate::views::setting_view::PluginInfo>,
-    ws_port: Option<u16>,
 ) {
     // Get saved window bounds for main window
     let main_window_config = config
@@ -196,14 +164,6 @@ pub fn run_app_with_plugins(
                     if let Some(cfg) = config {
                         view.set_config(cfg);
                     }
-                    // Set plugins if any
-                    if !plugins.is_empty() {
-                        view.set_plugins(plugins, cx);
-                    }
-                    // Set WebSocket port for plugin communication
-                    if let Some(port) = ws_port {
-                        view.set_ws_port(port, cx);
-                    }
                     view
                 });
                 // Wrap with Root to support gpui-component Input
@@ -214,16 +174,13 @@ pub fn run_app_with_plugins(
     });
 }
 
-/// Run the GPUI application with plugin info and tray support
+/// Run the GPUI application with tray support
 pub fn run_app_with_tray(
     event_rx: mpsc::Receiver<Event>,
     command_tx: mpsc::Sender<UiCommand>,
     database: Option<Arc<Database>>,
     config: Option<Arc<RwLock<ConfigStore>>>,
     has_events: Arc<AtomicBool>,
-    plugins: Vec<crate::views::setting_view::PluginInfo>,
-    ws_port: Option<u16>,
-    http_port: Option<u16>,
 ) {
     // Get saved window bounds for main window
     let main_window_config = config
@@ -311,18 +268,6 @@ pub fn run_app_with_tray(
                         }
                         if let Some(cfg) = config {
                             view.set_config(cfg);
-                        }
-                        // Set plugins if any
-                        if !plugins.is_empty() {
-                            view.set_plugins(plugins, cx);
-                        }
-                        // Set WebSocket port for plugin communication
-                        if let Some(port) = ws_port {
-                            view.set_ws_port(port, cx);
-                        }
-                        // Set HTTP port for plugin serving
-                        if let Some(port) = http_port {
-                            view.set_http_port(port, cx);
                         }
                         // Set tray manager
                         if let Some(ref tray) = tray_manager {

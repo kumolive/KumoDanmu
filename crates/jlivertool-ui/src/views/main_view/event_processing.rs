@@ -302,28 +302,6 @@ impl MainView {
                         view.set_guard_list(list, total, page, cx);
                     });
                 }
-                Event::PluginsRefreshed { plugins } => {
-                    let ui_plugins: Vec<crate::views::setting_view::PluginInfo> = plugins
-                        .into_iter()
-                        .map(|p| crate::views::setting_view::PluginInfo {
-                            id: p.id,
-                            name: p.name,
-                            author: p.author,
-                            desc: p.desc,
-                            version: p.version,
-                            enabled: true,
-                            path: p.path,
-                        })
-                        .collect();
-                    self.set_plugins(ui_plugins, cx);
-                }
-                Event::PluginImportResult { success, message } => {
-                    self.set_plugin_import_status(Some(message), cx);
-                    // Clear status after 5 seconds
-                    if success {
-                        // Status will be cleared when user starts typing a new URL
-                    }
-                }
                 Event::DataCleared => {
                     // Clear all UI lists when data is cleared
                     self.danmu_list.clear();

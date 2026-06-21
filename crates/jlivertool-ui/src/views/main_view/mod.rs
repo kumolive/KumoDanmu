@@ -32,7 +32,6 @@ use jlivertool_core::types::RoomId;
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -122,10 +121,6 @@ pub struct MainView {
     selected_user: SelectedUserState,
     // Last saved window bounds (to avoid saving on every frame)
     last_saved_bounds: Option<(i32, i32, u32, u32)>,
-    // WebSocket port for plugin communication
-    ws_port: Option<u16>,
-    // HTTP port for serving plugin files
-    http_port: Option<u16>,
     // Command autocomplete state
     show_command_popup: Rc<Cell<bool>>,
     selected_command_index: Rc<Cell<usize>>,
@@ -354,51 +349,6 @@ impl MainView {
                 }
             });
 
-            view.on_plugin_open({
-                let entity = entity.clone();
-                move |plugin_id, plugin_name, plugin_path, window, cx| {
-                    let _ = entity.update(cx, |view, cx| {
-                        view.open_plugin_in_browser(plugin_id, plugin_name, plugin_path, window, cx);
-                    });
-                }
-            });
-
-            view.on_open_plugins_folder({
-                let entity = entity.clone();
-                move |_window, cx| {
-                    let _ = entity.update(cx, |view, _cx| {
-                        if let Some(ref config) = view.config {
-                            let plugins_dir = config.read().data_dir().join("plugins");
-                            // Create the directory if it doesn't exist
-                            let _ = std::fs::create_dir_all(&plugins_dir);
-                            // Open the folder
-                            let _ = open::that(&plugins_dir);
-                        }
-                    });
-                }
-            });
-
-            view.on_refresh_plugins({
-                let tx = command_tx.clone();
-                move |_window, _cx| {
-                    let _ = tx.send(UiCommand::RefreshPlugins);
-                }
-            });
-
-            view.on_plugin_import({
-                let tx = command_tx.clone();
-                move |url, _window, _cx| {
-                    let _ = tx.send(UiCommand::ImportPlugin(url));
-                }
-            });
-
-            view.on_plugin_remove({
-                let tx = command_tx.clone();
-                move |plugin_id, plugin_path, _window, _cx| {
-                    let _ = tx.send(UiCommand::RemovePlugin { plugin_id, plugin_path });
-                }
-            });
-
             view.on_advanced_settings_change({
                 let tx = command_tx.clone();
                 move |max_danmu, log_level, _window, _cx| {
@@ -438,13 +388,6 @@ impl MainView {
                 let tx = command_tx.clone();
                 move |enabled, _window, _cx| {
                     let _ = tx.send(UiCommand::UpdateAutoUpdateCheck(enabled));
-                }
-            });
-
-            view.on_plugin_port_change({
-                let tx = command_tx.clone();
-                move |ws_port, http_port, _window, _cx| {
-                    let _ = tx.send(UiCommand::UpdatePluginPorts { ws_port, http_port });
                 }
             });
         });
@@ -493,8 +436,6 @@ impl MainView {
             pending_input_clear: Rc::new(Cell::new(false)),
             selected_user: Rc::new(RefCell::new(None)),
             last_saved_bounds: None,
-            ws_port: None,
-            http_port: None,
             show_command_popup: Rc::new(Cell::new(false)),
             selected_command_index: Rc::new(Cell::new(0)),
             pending_command_insert: Rc::new(RefCell::new(None)),
@@ -532,42 +473,6 @@ impl MainView {
     /// Get the setting view entity
     pub fn setting_view(&self) -> &Entity<SettingView> {
         &self.setting_view
-    }
-
-    /// Set the list of plugins in the settings view
-    pub fn set_plugins(&mut self, plugins: Vec<crate::views::setting_view::PluginInfo>, cx: &mut Context<Self>) {
-        self.setting_view.update(cx, |view, cx| {
-            view.set_plugins(plugins, cx);
-        });
-    }
-
-    /// Set plugin import status message
-    pub fn set_plugin_import_status(&mut self, status: Option<String>, cx: &mut Context<Self>) {
-        self.setting_view.update(cx, |view, cx| {
-            view.set_plugin_import_status(status, cx);
-        });
-    }
-
-    /// Set the WebSocket port for plugin communication
-    pub fn set_ws_port(&mut self, port: u16, cx: &mut Context<Self>) {
-        self.ws_port = Some(port);
-        // Update setting view with the port
-        if let Some(http_port) = self.http_port {
-            self.setting_view.update(cx, |view, cx| {
-                view.set_plugin_ports(port, http_port, cx);
-            });
-        }
-    }
-
-    /// Set the HTTP port for serving plugin files
-    pub fn set_http_port(&mut self, port: u16, cx: &mut Context<Self>) {
-        self.http_port = Some(port);
-        // Update setting view with the port
-        if let Some(ws_port) = self.ws_port {
-            self.setting_view.update(cx, |view, cx| {
-                view.set_plugin_ports(ws_port, port, cx);
-            });
-        }
     }
 
     /// Set the database reference
@@ -1355,51 +1260,4 @@ impl MainView {
         }
     }
 
-    /// Open plugin in the system's default browser
-    fn open_plugin_in_browser(
-        &self,
-        _plugin_id: String,
-        _plugin_name: String,
-        plugin_path: PathBuf,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) {
-        let http_port = match self.http_port {
-            Some(port) => port,
-            None => {
-                tracing::error!("HTTP port not set, cannot open plugin in browser");
-                return;
-            }
-        };
-
-        let ws_port = match self.ws_port {
-            Some(port) => port,
-            None => {
-                tracing::error!("WebSocket port not set, cannot open plugin in browser");
-                return;
-            }
-        };
-
-        // Get the folder name from the plugin path
-        let folder_name = match plugin_path.file_name() {
-            Some(name) => name.to_string_lossy().to_string(),
-            None => {
-                tracing::error!("Invalid plugin path: {:?}", plugin_path);
-                return;
-            }
-        };
-
-        // Build the URL for the plugin
-        let url = format!(
-            "http://127.0.0.1:{}/{}/index.html?ws_port={}",
-            http_port, folder_name, ws_port
-        );
-
-        tracing::info!("Opening plugin in browser: {}", url);
-
-        // Open in the system's default browser
-        if let Err(e) = open::that(&url) {
-            tracing::error!("Failed to open plugin in browser: {}", e);
-        }
-    }
 }
