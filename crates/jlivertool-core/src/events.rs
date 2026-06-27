@@ -152,6 +152,15 @@ pub enum Event {
 
     /// Live stream cut off
     CutOff(CutOffMessage),
+
+    /// All saved nicknames loaded (sent at startup and after bulk changes)
+    NicknamesLoaded { map: HashMap<u64, String> },
+
+    /// A single nickname created / updated (Some) or removed (None)
+    NicknameUpdated {
+        uid: u64,
+        nickname: Option<String>,
+    },
 }
 
 /// Event handler callback type
@@ -269,6 +278,8 @@ impl EventBus {
             Event::UpdateCheckResult { .. } => "update_check_result",
             Event::Warning(_) => "warning",
             Event::CutOff(_) => "cut_off",
+            Event::NicknamesLoaded { .. } => "nicknames_loaded",
+            Event::NicknameUpdated { .. } => "nickname_updated",
         }
     }
 }

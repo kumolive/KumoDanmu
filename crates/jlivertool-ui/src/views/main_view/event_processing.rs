@@ -27,21 +27,7 @@ impl MainView {
                     let is_new_room = self.room.as_ref().map(|r| r.real_id()) != Some(real_id);
 
                     if let Some(db) = &self.database {
-                        self.statistics_view.update(cx, |view, cx| {
-                            view.set_database(db.clone());
-                            view.set_room_id(Some(real_id), cx);
-                        });
-
                         if is_new_room {
-                            let db_clone = db.clone();
-                            self.gift_view.update(cx, |view, cx| {
-                                view.load_from_database(&db_clone, real_id, cx);
-                            });
-                            let db_clone = db.clone();
-                            self.superchat_view.update(cx, |view, cx| {
-                                view.load_from_database(&db_clone, real_id, cx);
-                            });
-
                             if let Ok(recent_danmus) = db.get_danmus_since(real_id, 30) {
                                 for danmu in recent_danmus {
                                     self.danmu_list.push_back(DisplayMessage::Danmu(danmu));
@@ -119,8 +105,7 @@ impl MainView {
                 }
                 Event::NewGift(gift) => {
                     let should_auto_scroll = self.is_at_bottom();
-                    self.danmu_list
-                        .push_back(DisplayMessage::Gift(gift.clone()));
+                    self.danmu_list.push_back(DisplayMessage::Gift(gift));
                     if should_auto_scroll {
                         while self.danmu_list.len() > MAX_DANMU_COUNT {
                             self.danmu_list.pop_front();
@@ -128,14 +113,10 @@ impl MainView {
                         self.scroll_to_bottom();
                     }
                     list_modified = true;
-                    self.gift_view.update(cx, |view, cx| {
-                        view.add_gift(gift, cx);
-                    });
                 }
                 Event::NewGuard(guard) => {
                     let should_auto_scroll = self.is_at_bottom();
-                    self.danmu_list
-                        .push_back(DisplayMessage::Guard(guard.clone()));
+                    self.danmu_list.push_back(DisplayMessage::Guard(guard));
                     if should_auto_scroll {
                         while self.danmu_list.len() > MAX_DANMU_COUNT {
                             self.danmu_list.pop_front();
@@ -143,24 +124,9 @@ impl MainView {
                         self.scroll_to_bottom();
                     }
                     list_modified = true;
-                    self.gift_view.update(cx, |view, cx| {
-                        view.add_guard(guard, cx);
-                    });
                 }
                 Event::NewSuperChat(sc) => {
-                    let should_auto_scroll = self.is_at_bottom();
-                    self.danmu_list
-                        .push_back(DisplayMessage::SuperChat(sc.clone()));
-                    if should_auto_scroll {
-                        while self.danmu_list.len() > MAX_DANMU_COUNT {
-                            self.danmu_list.pop_front();
-                        }
-                        self.scroll_to_bottom();
-                    }
-                    list_modified = true;
-                    self.superchat_view.update(cx, |view, cx| {
-                        view.add_superchat(sc, cx);
-                    });
+                    self.floating_sc.push(sc);
                 }
                 Event::ConnectionStatus { connected } => {
                     self.connected = connected;
@@ -172,9 +138,6 @@ impl MainView {
                 }
                 Event::LiveEnd => {
                     self.live_status = 0;
-                    self.setting_view.update(cx, |view, cx| {
-                        view.clear_rtmp_info(cx);
-                    });
                     self.update_tray_state();
                 }
                 Event::LoginStatusChanged {
@@ -258,30 +221,21 @@ impl MainView {
                     // Force rebuild of render rows
                     self.last_render_width = 0.0;
                     self.render_rows_source_count = 0;
-                    self.gift_view
-                        .update(cx, |v, cx| v.set_opacity(opacity, cx));
-                    self.superchat_view
-                        .update(cx, |v, cx| v.set_opacity(opacity, cx));
-                    self.statistics_view
-                        .update(cx, |v, cx| v.set_opacity(opacity, cx));
                     self.audience_view
                         .update(cx, |v, cx| v.set_opacity(opacity, cx));
                     if always_on_top {
                         self.pending_always_on_top = Some(always_on_top);
                     }
                 }
-                Event::RtmpInfo { addr, code } => {
-                    self.setting_view.update(cx, |view, cx| {
-                        view.set_rtmp_info(addr, code, cx);
-                    });
-                }
                 Event::FaceAuthRequired { qr_url } => {
-                    self.setting_view.update(cx, |view, cx| {
-                        view.show_face_auth_dialog(qr_url, cx);
+                    self.face_auth_qr_view.update(cx, |view, cx| {
+                        view.set_data(qr_url, cx);
                     });
+                    self.show_face_auth_dialog = true;
                 }
                 Event::ClearDanmuList => {
                     self.danmu_list.clear();
+                    self.floating_sc.clear();
                     list_modified = true;
                 }
                 Event::UserInfoFetched { uid, user_info } => {
@@ -303,19 +257,14 @@ impl MainView {
                     });
                 }
                 Event::DataCleared => {
-                    // Clear all UI lists when data is cleared
                     self.danmu_list.clear();
+                    self.floating_sc.clear();
                     list_modified = true;
-                    // Gift and SC views will be reloaded from database (which is now empty)
                     tracing::info!("Data cleared, UI lists reset");
                 }
                 Event::RoomChange(room_change) => {
-                    // Update room title when it changes via WebSocket
                     if !room_change.title.is_empty() {
-                        self.room_title = room_change.title.clone();
-                        self.setting_view.update(cx, |view, cx| {
-                            view.set_room_title(room_change.title, cx);
-                        });
+                        self.room_title = room_change.title;
                     }
                 }
                 Event::UpdateCheckResult {
@@ -346,6 +295,31 @@ impl MainView {
                         view.set_update_status(status, cx);
                     });
                 }
+                Event::NicknamesLoaded { map } => {
+                    let map_for_setting = map.clone();
+                    self.nicknames = std::rc::Rc::new(map);
+                    self.setting_view.update(cx, |v, cx| v.set_nicknames(map_for_setting, cx));
+                    // Names embed into the per-row prefix width — force rebuild.
+                    self.last_render_width = 0.0;
+                    self.render_rows_source_count = 0;
+                }
+                Event::NicknameUpdated { uid, nickname } => {
+                    let mut new = (*self.nicknames).clone();
+                    match &nickname {
+                        Some(n) if !n.is_empty() => {
+                            new.insert(uid, n.clone());
+                        }
+                        _ => {
+                            new.remove(&uid);
+                        }
+                    }
+                    self.nicknames = std::rc::Rc::new(new);
+                    self.setting_view.update(cx, |v, cx| {
+                        v.apply_nickname_change(uid, nickname, cx);
+                    });
+                    self.last_render_width = 0.0;
+                    self.render_rows_source_count = 0;
+                }
                 _ => {}
             }
         }
@@ -353,6 +327,12 @@ impl MainView {
             // Render rows will be updated in render() via update_render_rows()
             self.render_rows_source_count = 0;
             self.render_rows = std::rc::Rc::new(Vec::new());
+        }
+
+        // Prune expired floating SuperChats
+        if !self.floating_sc.is_empty() {
+            let now = chrono::Utc::now().timestamp();
+            self.floating_sc.retain(|sc| now < sc.end_time);
         }
     }
 }

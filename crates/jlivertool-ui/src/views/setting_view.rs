@@ -4,6 +4,7 @@ use crate::components::{draggable_area, render_window_controls, QrCodeView};
 use crate::theme::Colors;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use gpui_component::input::{Input, InputState};
 use gpui_component::{
     h_flex,
     slider::{Slider, SliderEvent, SliderState},
@@ -12,34 +13,32 @@ use gpui_component::{
 };
 use jlivertool_core::bilibili::api::{QrCodeStatus, UserInfoData};
 use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Type alias for simple callbacks (no parameters)
 type SimpleCallback = Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>;
 /// Type alias for room-related callbacks (room_id parameter)
 type RoomCallback = Arc<dyn Fn(u64, &mut Window, &mut App) + Send + Sync>;
-/// Type alias for start live callback (room_id, area_id parameters)
-type StartLiveCallback = Arc<dyn Fn(u64, u64, &mut Window, &mut App) + Send + Sync>;
 /// Type alias for opacity/font size callbacks (f32 parameter)
 type FloatCallback = Arc<dyn Fn(f32, &mut Window, &mut App) + Send + Sync>;
 /// Type alias for window settings callback (5 bool parameters)
 type WindowSettingsCallback = Arc<dyn Fn(bool, bool, bool, bool, bool, &mut Window, &mut App) + Send + Sync>;
 /// Type alias for theme callback (String parameter)
 type ThemeCallback = Arc<dyn Fn(String, &mut Window, &mut App) + Send + Sync>;
-/// Type alias for TTS enabled callback (3 bool parameters: danmu, gift, superchat)
-type TtsEnabledCallback = Arc<dyn Fn(bool, bool, bool, &mut Window, &mut App) + Send + Sync>;
 /// Type alias for advanced settings callback (max_danmu, log_level)
 type AdvancedSettingsCallback = Arc<dyn Fn(usize, String, &mut Window, &mut App) + Send + Sync>;
 /// Type alias for clear data callback
 type ClearDataCallback = Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>;
 /// Type alias for open data folder callback
 type OpenDataFolderCallback = Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>;
-/// Type alias for room title update callback (room_id, title)
-type RoomTitleCallback = Arc<dyn Fn(u64, String, &mut Window, &mut App) + Send + Sync>;
 /// Type alias for update check callback
 type UpdateCheckCallback = Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>;
 /// Type alias for auto update setting change callback (enabled)
 type AutoUpdateCallback = Arc<dyn Fn(bool, &mut Window, &mut App) + Send + Sync>;
+/// Type alias for nickname change callback (uid, Some(name) = set, None = remove)
+type SetNicknameCallback =
+    Arc<dyn Fn(u64, Option<String>, &mut Window, &mut App) + Send + Sync>;
 
 /// Settings view state
 pub struct SettingView {
@@ -49,15 +48,10 @@ pub struct SettingView {
     room_id: Option<u64>,
     // Room owner UID (to check if user owns the room)
     room_owner_uid: Option<u64>,
-    // Room title (for room owners to edit)
+    // Room title (display-only)
     room_title: String,
-    // Room area ID (for starting live)
+    // Room area ID (display-only)
     area_id: u64,
-    // Face auth dialog state
-    show_face_auth_dialog: bool,
-    face_auth_qr_url: String,
-    // Face auth QR code view
-    face_auth_qr_view: Entity<QrCodeView>,
     // Room editing state
     room_input: Arc<RwLock<RoomInputState>>,
     // Account info
@@ -69,36 +63,34 @@ pub struct SettingView {
     on_logout: Option<SimpleCallback>,
     on_change_room: Option<RoomCallback>,
     on_opacity_change: Option<FloatCallback>,
-    on_open_gift_window: Option<SimpleCallback>,
-    on_open_superchat_window: Option<SimpleCallback>,
-    on_open_statistics_window: Option<SimpleCallback>,
-    on_start_live: Option<StartLiveCallback>,
-    on_stop_live: Option<RoomCallback>,
     on_window_settings_change: Option<WindowSettingsCallback>,
     on_theme_change: Option<ThemeCallback>,
     on_font_size_change: Option<FloatCallback>,
-    rtmp_info: Arc<RwLock<Option<RtmpInfo>>>,
     // Merge settings
     merge_settings: Arc<RwLock<MergeSettings>>,
     // Active tab
     active_tab: usize,
-    // TTS callbacks
-    on_tts_enabled_change: Option<TtsEnabledCallback>,
-    on_tts_volume_change: Option<FloatCallback>,
-    on_tts_test: Option<SimpleCallback>,
     // Advanced settings
     max_danmu_count: Arc<RwLock<usize>>,
     log_level: Arc<RwLock<String>>,
     on_advanced_settings_change: Option<AdvancedSettingsCallback>,
     on_clear_data: Option<ClearDataCallback>,
     on_open_data_folder: Option<OpenDataFolderCallback>,
-    on_room_title_change: Option<RoomTitleCallback>,
     show_clear_data_confirm: bool,
     // Update check
     auto_update_check: Arc<RwLock<bool>>,
     update_status: Arc<RwLock<UpdateStatus>>,
     on_check_update: Option<UpdateCheckCallback>,
     on_auto_update_change: Option<AutoUpdateCallback>,
+    // Nicknames
+    nicknames: Arc<RwLock<HashMap<u64, String>>>,
+    on_set_nickname: Option<SetNicknameCallback>,
+    /// Lazily-created per-uid InputState entities for the row editor in the
+    /// nicknames tab. Keyed by uid.
+    nickname_edit_inputs: HashMap<u64, Entity<InputState>>,
+    /// Top-of-tab "add nickname" form state (None until first render).
+    add_nickname_uid_input: Option<Entity<InputState>>,
+    add_nickname_name_input: Option<Entity<InputState>>,
 }
 
 /// Update check status
@@ -121,7 +113,7 @@ enum SettingsTab {
     Basic = 0,
     Window = 1,
     Appearance = 2,
-    Tts = 3,
+    Nicknames = 3,
     Advanced = 4,
     About = 5,
 }
@@ -132,7 +124,7 @@ impl SettingsTab {
             Self::Basic => "基础设置",
             Self::Window => "窗口设置",
             Self::Appearance => "外观设置",
-            Self::Tts => "TTS 设置",
+            Self::Nicknames => "昵称",
             Self::Advanced => "高级设置",
             Self::About => "关于",
         }
@@ -143,17 +135,11 @@ impl SettingsTab {
             Self::Basic,
             Self::Window,
             Self::Appearance,
-            Self::Tts,
+            Self::Nicknames,
             Self::Advanced,
             Self::About,
         ]
     }
-}
-
-#[derive(Clone, Default)]
-pub struct RtmpInfo {
-    pub addr: String,
-    pub code: String,
 }
 
 /// Merge settings for danmu aggregation
@@ -225,7 +211,7 @@ impl Default for SettingsData {
     fn default() -> Self {
         Self {
             lite_mode: false,
-            medal_display: true,
+            medal_display: false,
             interact_display: false,
             guard_effect: true,
             level_effect: false,
@@ -244,7 +230,6 @@ impl Default for SettingsData {
 impl SettingView {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let qr_code_view = cx.new(QrCodeView::new);
-        let face_auth_qr_view = cx.new(QrCodeView::new);
 
         Self {
             settings: Arc::new(RwLock::new(SettingsData::default())),
@@ -252,9 +237,6 @@ impl SettingView {
             room_owner_uid: None,
             room_title: String::new(),
             area_id: 0,
-            show_face_auth_dialog: false,
-            face_auth_qr_url: String::new(),
-            face_auth_qr_view,
             room_input: Arc::new(RwLock::new(RoomInputState::default())),
             account: Arc::new(RwLock::new(AccountState::default())),
             qr_code_view,
@@ -262,32 +244,72 @@ impl SettingView {
             on_logout: None,
             on_change_room: None,
             on_opacity_change: None,
-            on_open_gift_window: None,
-            on_open_superchat_window: None,
-            on_open_statistics_window: None,
-            on_start_live: None,
-            on_stop_live: None,
             on_window_settings_change: None,
             on_theme_change: None,
             on_font_size_change: None,
-            rtmp_info: Arc::new(RwLock::new(None)),
             merge_settings: Arc::new(RwLock::new(MergeSettings::default())),
             active_tab: 0,
-            on_tts_enabled_change: None,
-            on_tts_volume_change: None,
-            on_tts_test: None,
             max_danmu_count: Arc::new(RwLock::new(200)),
             log_level: Arc::new(RwLock::new("info".to_string())),
             on_advanced_settings_change: None,
             on_clear_data: None,
             on_open_data_folder: None,
-            on_room_title_change: None,
             show_clear_data_confirm: false,
             auto_update_check: Arc::new(RwLock::new(true)),
             update_status: Arc::new(RwLock::new(UpdateStatus::default())),
             on_check_update: None,
             on_auto_update_change: None,
+            nicknames: Arc::new(RwLock::new(HashMap::new())),
+            on_set_nickname: None,
+            nickname_edit_inputs: HashMap::new(),
+            add_nickname_uid_input: None,
+            add_nickname_name_input: None,
         }
+    }
+
+    /// Replace the entire nickname cache (used when NicknamesLoaded arrives).
+    pub fn set_nicknames(
+        &mut self,
+        map: HashMap<u64, String>,
+        cx: &mut Context<Self>,
+    ) {
+        // Drop edit inputs for uids that no longer exist; the rest will be
+        // re-bound lazily during the next render.
+        self.nickname_edit_inputs
+            .retain(|uid, _| map.contains_key(uid));
+        *self.nicknames.write() = map;
+        cx.notify();
+    }
+
+    /// Apply a single (uid, nickname) change to the cache.
+    /// `None` means the nickname was deleted.
+    pub fn apply_nickname_change(
+        &mut self,
+        uid: u64,
+        nickname: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut map = self.nicknames.write();
+        match nickname {
+            Some(n) if !n.is_empty() => {
+                map.insert(uid, n);
+            }
+            _ => {
+                map.remove(&uid);
+                self.nickname_edit_inputs.remove(&uid);
+            }
+        }
+        drop(map);
+        cx.notify();
+    }
+
+    /// Register the callback fired when the user saves or deletes a nickname
+    /// from either the row editor or the top-of-tab "add" form.
+    pub fn on_set_nickname<F>(&mut self, callback: F)
+    where
+        F: Fn(u64, Option<String>, &mut Window, &mut App) + Send + Sync + 'static,
+    {
+        self.on_set_nickname = Some(Arc::new(callback));
     }
 
     /// Set room ID and owner UID to display
@@ -320,43 +342,6 @@ impl SettingView {
         self.area_id
     }
 
-    /// Show face auth dialog with QR code
-    pub fn show_face_auth_dialog(&mut self, qr_url: String, cx: &mut Context<Self>) {
-        self.face_auth_qr_url = qr_url.clone();
-        self.show_face_auth_dialog = true;
-        // Set the QR code data
-        self.face_auth_qr_view.update(cx, |view, cx| {
-            view.set_data(qr_url, cx);
-        });
-        cx.notify();
-    }
-
-    /// Hide face auth dialog
-    pub fn hide_face_auth_dialog(&mut self, cx: &mut Context<Self>) {
-        self.show_face_auth_dialog = false;
-        self.face_auth_qr_url.clear();
-        cx.notify();
-    }
-
-    /// Set room title change callback
-    pub fn on_room_title_change<F>(&mut self, callback: F)
-    where
-        F: Fn(u64, String, &mut Window, &mut App) + Send + Sync + 'static,
-    {
-        self.on_room_title_change = Some(Arc::new(callback));
-    }
-
-    /// Check if the logged-in user owns the current room
-    fn is_room_owner(&self) -> bool {
-        let account = self.account.read();
-        if !account.logged_in {
-            return false;
-        }
-        if let (Some(user_info), Some(owner_uid)) = (&account.user_info, self.room_owner_uid) {
-            return user_info.mid == owner_uid;
-        }
-        false
-    }
 
     /// Set change room callback
     pub fn on_change_room<F>(&mut self, callback: F)
@@ -390,41 +375,6 @@ impl SettingView {
         self.on_opacity_change = Some(Arc::new(callback));
     }
 
-    pub fn on_open_gift_window<F>(&mut self, callback: F)
-    where
-        F: Fn(&mut Window, &mut App) + Send + Sync + 'static,
-    {
-        self.on_open_gift_window = Some(Arc::new(callback));
-    }
-
-    pub fn on_open_superchat_window<F>(&mut self, callback: F)
-    where
-        F: Fn(&mut Window, &mut App) + Send + Sync + 'static,
-    {
-        self.on_open_superchat_window = Some(Arc::new(callback));
-    }
-
-    pub fn on_open_statistics_window<F>(&mut self, callback: F)
-    where
-        F: Fn(&mut Window, &mut App) + Send + Sync + 'static,
-    {
-        self.on_open_statistics_window = Some(Arc::new(callback));
-    }
-
-    pub fn on_start_live<F>(&mut self, callback: F)
-    where
-        F: Fn(u64, u64, &mut Window, &mut App) + Send + Sync + 'static,
-    {
-        self.on_start_live = Some(Arc::new(callback));
-    }
-
-    pub fn on_stop_live<F>(&mut self, callback: F)
-    where
-        F: Fn(u64, &mut Window, &mut App) + Send + Sync + 'static,
-    {
-        self.on_stop_live = Some(Arc::new(callback));
-    }
-
     /// Set callback for window settings changes
     /// Parameters: lite_mode, medal_display, interact_display, guard_effect, level_effect
     pub fn on_window_settings_change<F>(&mut self, callback: F)
@@ -448,30 +398,6 @@ impl SettingView {
         F: Fn(f32, &mut Window, &mut App) + Send + Sync + 'static,
     {
         self.on_font_size_change = Some(Arc::new(callback));
-    }
-
-    /// Set callback for TTS enabled changes
-    pub fn on_tts_enabled_change<F>(&mut self, callback: F)
-    where
-        F: Fn(bool, bool, bool, &mut Window, &mut App) + Send + Sync + 'static,
-    {
-        self.on_tts_enabled_change = Some(Arc::new(callback));
-    }
-
-    /// Set callback for TTS volume changes
-    pub fn on_tts_volume_change<F>(&mut self, callback: F)
-    where
-        F: Fn(f32, &mut Window, &mut App) + Send + Sync + 'static,
-    {
-        self.on_tts_volume_change = Some(Arc::new(callback));
-    }
-
-    /// Set callback for TTS test
-    pub fn on_tts_test<F>(&mut self, callback: F)
-    where
-        F: Fn(&mut Window, &mut App) + Send + Sync + 'static,
-    {
-        self.on_tts_test = Some(Arc::new(callback));
     }
 
     /// Set advanced settings change callback
@@ -533,20 +459,6 @@ impl SettingView {
         cx.notify();
     }
 
-    /// Notify TTS enabled change
-    fn notify_tts_enabled_change(&self, window: &mut Window, cx: &mut App) {
-        if let Some(ref callback) = self.on_tts_enabled_change {
-            let settings = self.settings.read();
-            callback(
-                settings.tts_enabled,
-                settings.gift_tts,
-                settings.sc_tts,
-                window,
-                cx,
-            );
-        }
-    }
-
     /// Notify window settings change
     fn notify_window_settings_change(&self, window: &mut Window, cx: &mut App) {
         if let Some(ref callback) = self.on_window_settings_change {
@@ -561,16 +473,6 @@ impl SettingView {
                 cx,
             );
         }
-    }
-
-    pub fn set_rtmp_info(&mut self, addr: String, code: String, cx: &mut Context<Self>) {
-        *self.rtmp_info.write() = Some(RtmpInfo { addr, code });
-        cx.notify();
-    }
-
-    pub fn clear_rtmp_info(&mut self, cx: &mut Context<Self>) {
-        *self.rtmp_info.write() = None;
-        cx.notify();
     }
 
     /// Update login status
@@ -984,9 +886,6 @@ impl SettingView {
         let room_input = room_input_state.read().clone();
         let on_change_room = self.on_change_room.clone();
         let current_room_id = self.room_id;
-        let is_owner = self.is_room_owner();
-        let current_title = self.room_title.clone();
-        let on_room_title_change = self.on_room_title_change.clone();
 
         // Create InputState using keyed state - returns a wrapper struct
         struct RoomInputWrapper {
@@ -1008,495 +907,65 @@ impl SettingView {
 
         let input_state = state.read(cx).input.clone();
 
-        // Create title input state using keyed state (same pattern as room input)
-        struct TitleInputWrapper {
-            input: Entity<gpui_component::input::InputState>,
-        }
-
-        let title_state =
-            window.use_keyed_state(SharedString::from("room-title-input-state"), cx, |window, cx| {
-                let input = cx.new(|cx| {
-                    gpui_component::input::InputState::new(window, cx)
-                        .placeholder("输入直播间标题...")
-                        .default_value(current_title.clone())
-                });
-
-                TitleInputWrapper { input }
-            });
-
-        let title_input_state = title_state.read(cx).input.clone();
-
         self.render_section_card(
             v_flex()
                 .w_full()
                 .child(self.render_section_title("直播间设置"))
-            .child(
-                v_flex()
-                    .w_full()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_size(px(13.0))
-                            .text_color(Colors::text_primary())
-                            .child("房间号"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.0))
-                            .text_color(Colors::text_muted())
-                            .child("输入直播间的数字 ID"),
-                    )
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .gap_2()
-                            .items_center()
-                            .child(div().flex_1().child(
-                                gpui_component::input::Input::new(&input_state).cleanable(true),
-                            ))
-                            .child(
-                                div()
-                                    .id("confirm-room-btn")
-                                    .px_4()
-                                    .py(px(7.0))
-                                    .rounded_md()
-                                    .cursor_pointer()
-                                    .bg(Colors::accent())
-                                    .hover(|s| s.opacity(0.8))
-                                    .text_size(px(13.0))
-                                    .text_color(Colors::button_text())
-                                    .child("确认")
-                                    .on_click({
-                                        let input_state = input_state.clone();
-                                        move |_event, window, cx| {
-                                            let text = input_state.read(cx).text().to_string();
-                                            if let Ok(room_id) = text.parse::<u64>() {
-                                                if let Some(ref callback) = on_change_room {
-                                                    callback(room_id, window, cx);
-                                                }
-                                            }
-                                        }
-                                    }),
-                            ),
-                    )
-                    .when(room_input.error, |this| {
-                        this.child(
-                            div()
-                                .text_size(px(11.0))
-                                .text_color(Colors::error())
-                                .child("房间号无效，请检查输入"),
-                        )
-                    })
-                    // Room title editing for room owners - rendered outside .when() to fix input focus issues
-                    .child(
-                        div()
-                            .mt_4()
-                            .pt_4()
-                            .border_t_1()
-                            .border_color(Colors::bg_hover())
-                            // Use visibility instead of conditional rendering to preserve input focus
-                            .when(!is_owner, |this| this.hidden())
-                            .child(
-                                v_flex()
-                                    .w_full()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .text_size(px(13.0))
-                                            .text_color(Colors::text_primary())
-                                            .child("直播间标题"),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(11.0))
-                                            .text_color(Colors::text_muted())
-                                            .child("修改直播间标题（仅房主可用）"),
-                                    )
-                                    .child(
-                                        h_flex()
-                                            .w_full()
-                                            .gap_2()
-                                            .items_center()
-                                            .child(div().flex_1().child(
-                                                gpui_component::input::Input::new(&title_input_state).cleanable(true),
-                                            ))
-                                            .child({
-                                                let title_input_state = title_input_state.clone();
-                                                let room_id = current_room_id;
-                                                let callback = on_room_title_change.clone();
-                                                div()
-                                                    .id("update-title-btn")
-                                                    .px_4()
-                                                    .py(px(7.0))
-                                                    .rounded_md()
-                                                    .cursor_pointer()
-                                                    .bg(Colors::accent())
-                                                    .hover(|s| s.opacity(0.8))
-                                                    .text_size(px(13.0))
-                                                    .text_color(Colors::button_text())
-                                                    .child("更新")
-                                                    .on_click(move |_event, window, cx| {
-                                                        let title = title_input_state.read(cx).text().to_string();
-                                                        if let Some(room_id) = room_id {
-                                                            if let Some(ref cb) = callback {
-                                                                cb(room_id, title, window, cx);
-                                                            }
-                                                        }
-                                                    })
-                                            }),
-                                    ),
-                            ),
-                    ),
-            ),
-        )
-    }
-
-    fn render_live_controls_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let on_start_live = self.on_start_live.clone();
-        let on_stop_live = self.on_stop_live.clone();
-        let rtmp_info = self.rtmp_info.read().clone();
-        let room_id = self.room_id;
-        let area_id = self.area_id;
-        let is_live = rtmp_info.is_some();
-
-        self.render_section_card(
-            v_flex()
-                .w_full()
-                .child(self.render_section_title("直播控制"))
                 .child(
                     v_flex()
                         .w_full()
-                        .gap_4()
-                        // Status indicator
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_size(px(13.0))
+                                .text_color(Colors::text_primary())
+                                .child("房间号"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(Colors::text_muted())
+                                .child("输入直播间的数字 ID"),
+                        )
                         .child(
                             h_flex()
                                 .w_full()
-                                .px_4()
-                                .py_3()
-                                .rounded(px(8.0))
-                                .bg(if is_live {
-                                    Colors::success().opacity(0.1)
-                                } else {
-                                    Colors::bg_hover()
-                                })
-                                .border_1()
-                                .border_color(if is_live {
-                                    Colors::success().opacity(0.3)
-                                } else {
-                                    Colors::bg_hover()
-                                })
+                                .gap_2()
                                 .items_center()
-                                .gap_3()
+                                .child(div().flex_1().child(
+                                    gpui_component::input::Input::new(&input_state).cleanable(true),
+                                ))
                                 .child(
-                                    // Status dot with pulse effect
                                     div()
-                                        .size(px(10.0))
-                                        .rounded_full()
-                                        .bg(if is_live {
-                                            Colors::success()
-                                        } else {
-                                            Colors::text_muted()
+                                        .id("confirm-room-btn")
+                                        .px_4()
+                                        .py(px(7.0))
+                                        .rounded_md()
+                                        .cursor_pointer()
+                                        .bg(Colors::accent())
+                                        .hover(|s| s.opacity(0.8))
+                                        .text_size(px(13.0))
+                                        .text_color(Colors::button_text())
+                                        .child("确认")
+                                        .on_click({
+                                            let input_state = input_state.clone();
+                                            move |_event, window, cx| {
+                                                let text = input_state.read(cx).text().to_string();
+                                                if let Ok(room_id) = text.parse::<u64>() {
+                                                    if let Some(ref callback) = on_change_room {
+                                                        callback(room_id, window, cx);
+                                                    }
+                                                }
+                                            }
                                         }),
-                                )
-                                .child(
-                                    v_flex()
-                                        .flex_1()
-                                        .gap(px(2.0))
-                                        .child(
-                                            div()
-                                                .text_size(px(13.0))
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .text_color(Colors::text_primary())
-                                                .child(if is_live { "直播中" } else { "未开播" }),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(px(11.0))
-                                                .text_color(Colors::text_muted())
-                                                .child(if is_live {
-                                                    "推流信息已就绪"
-                                                } else {
-                                                    "点击下方按钮开始直播"
-                                                }),
-                                        ),
                                 ),
                         )
-                        // Control buttons
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .gap_3()
-                                // Start button - outlined style when not live, solid when can start
-                                .child(
-                                    div()
-                                        .id("start-live-btn")
-                                        .flex_1()
-                                        .px_4()
-                                        .py(px(10.0))
-                                        .rounded(px(8.0))
-                                        .cursor_pointer()
-                                        .border_1()
-                                        .when(!is_live, |this| {
-                                            this.bg(Colors::accent())
-                                                .border_color(Colors::accent())
-                                                .hover(|s| s.opacity(0.9))
-                                        })
-                                        .when(is_live, |this| {
-                                            this.bg(gpui::transparent_black())
-                                                .border_color(Colors::text_muted().opacity(0.3))
-                                                .hover(|s| s.bg(Colors::bg_hover()))
-                                        })
-                                        .text_size(px(13.0))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(if is_live {
-                                            Colors::text_muted()
-                                        } else {
-                                            Colors::text_primary()
-                                        })
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .gap_2()
-                                        // Play icon (circle outline)
-                                        .child(
-                                            div()
-                                                .size(px(16.0))
-                                                .rounded_full()
-                                                .border_1()
-                                                .border_color(if is_live {
-                                                    Colors::text_muted()
-                                                } else {
-                                                    Colors::text_primary()
-                                                })
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .child(
-                                                    // Inner triangle approximation using a small rotated square
-                                                    div()
-                                                        .ml(px(1.0))
-                                                        .w(px(5.0))
-                                                        .h(px(6.0))
-                                                        .bg(if is_live {
-                                                            Colors::text_muted()
-                                                        } else {
-                                                            Colors::text_primary()
-                                                        }),
-                                                ),
-                                        )
-                                        .child("开始直播")
-                                        .on_click(cx.listener(move |_view, _event, window, cx| {
-                                            if let Some(ref callback) = on_start_live {
-                                                if let Some(room_id) = room_id {
-                                                    callback(room_id, area_id, window, cx);
-                                                }
-                                            }
-                                        })),
-                                )
-                                // Stop button - outlined style when live, disabled when not
-                                .child(
-                                    div()
-                                        .id("stop-live-btn")
-                                        .flex_1()
-                                        .px_4()
-                                        .py(px(10.0))
-                                        .rounded(px(8.0))
-                                        .cursor_pointer()
-                                        .border_1()
-                                        .when(is_live, |this| {
-                                            this.bg(gpui::transparent_black())
-                                                .border_color(Colors::error().opacity(0.5))
-                                                .text_color(Colors::error())
-                                                .hover(|s| s.bg(Colors::error().opacity(0.1)))
-                                        })
-                                        .when(!is_live, |this| {
-                                            this.bg(gpui::transparent_black())
-                                                .border_color(Colors::text_muted().opacity(0.3))
-                                                .text_color(Colors::text_muted())
-                                                .hover(|s| s.bg(Colors::bg_hover()))
-                                        })
-                                        .text_size(px(13.0))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .gap_2()
-                                        // Stop icon (square)
-                                        .child(
-                                            div()
-                                                .size(px(10.0))
-                                                .rounded(px(2.0))
-                                                .bg(if is_live {
-                                                    Colors::error()
-                                                } else {
-                                                    Colors::text_muted()
-                                                }),
-                                        )
-                                        .child("停止直播")
-                                        .on_click(cx.listener(move |_view, _event, window, cx| {
-                                            if let Some(ref callback) = on_stop_live {
-                                                if let Some(room_id) = room_id {
-                                                    callback(room_id, window, cx);
-                                                }
-                                            }
-                                        })),
-                                ),
-                        )
-                        // RTMP info section - only shown when live
-                        .when(rtmp_info.is_some(), |this| {
-                            let info = rtmp_info.unwrap();
+                        .when(room_input.error, |this| {
                             this.child(
-                                v_flex()
-                                    .w_full()
-                                    .mt_1()
-                                    .p_4()
-                                    .rounded(px(8.0))
-                                    .bg(Colors::bg_hover().opacity(0.5))
-                                    .gap_4()
-                                    // Header
-                                    .child(
-                                        h_flex()
-                                            .w_full()
-                                            .items_center()
-                                            .gap_2()
-                                            .child(
-                                                // Broadcast icon
-                                                div()
-                                                    .size(px(16.0))
-                                                    .rounded_full()
-                                                    .bg(Colors::accent().opacity(0.2))
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
-                                                    .child(
-                                                        div()
-                                                            .size(px(6.0))
-                                                            .rounded_full()
-                                                            .bg(Colors::accent()),
-                                                    ),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_size(px(12.0))
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(Colors::text_primary())
-                                                    .child("推流信息"),
-                                            ),
-                                    )
-                                    // Server address
-                                    .child(
-                                        v_flex()
-                                            .w_full()
-                                            .gap_2()
-                                            .child(
-                                                div()
-                                                    .text_size(px(11.0))
-                                                    .text_color(Colors::text_muted())
-                                                    .child("服务器地址 (RTMP URL)"),
-                                            )
-                                            .child(
-                                                h_flex()
-                                                    .w_full()
-                                                    .gap_2()
-                                                    .items_center()
-                                                    .child(
-                                                        div()
-                                                            .flex_1()
-                                                            .px_3()
-                                                            .py_2()
-                                                            .rounded(px(6.0))
-                                                            .bg(Colors::bg_primary())
-                                                            .border_1()
-                                                            .border_color(Colors::bg_hover())
-                                                            .text_size(px(11.0))
-                                                            .text_color(Colors::text_secondary())
-                                                            .overflow_hidden()
-                                                            .text_ellipsis()
-                                                            .child(info.addr.clone()),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .id("copy-rtmp-addr-btn")
-                                                            .px_3()
-                                                            .py_2()
-                                                            .rounded(px(6.0))
-                                                            .cursor_pointer()
-                                                            .bg(gpui::transparent_black())
-                                                            .border_1()
-                                                            .border_color(Colors::accent().opacity(0.5))
-                                                            .text_color(Colors::accent())
-                                                            .hover(|s| s.bg(Colors::accent().opacity(0.1)))
-                                                            .text_size(px(11.0))
-                                                            .font_weight(FontWeight::MEDIUM)
-                                                            .child("复制")
-                                                            .on_click({
-                                                                let addr = info.addr.clone();
-                                                                move |_event, _window, cx| {
-                                                                    cx.write_to_clipboard(
-                                                                        ClipboardItem::new_string(addr.clone()),
-                                                                    );
-                                                                }
-                                                            }),
-                                                    ),
-                                            ),
-                                    )
-                                    // Stream key
-                                    .child(
-                                        v_flex()
-                                            .w_full()
-                                            .gap_2()
-                                            .child(
-                                                div()
-                                                    .text_size(px(11.0))
-                                                    .text_color(Colors::text_muted())
-                                                    .child("推流密钥 (Stream Key)"),
-                                            )
-                                            .child(
-                                                h_flex()
-                                                    .w_full()
-                                                    .gap_2()
-                                                    .items_center()
-                                                    .child(
-                                                        div()
-                                                            .flex_1()
-                                                            .px_3()
-                                                            .py_2()
-                                                            .rounded(px(6.0))
-                                                            .bg(Colors::bg_primary())
-                                                            .border_1()
-                                                            .border_color(Colors::bg_hover())
-                                                            .text_size(px(11.0))
-                                                            .text_color(Colors::text_secondary())
-                                                            .overflow_hidden()
-                                                            .text_ellipsis()
-                                                            .child(info.code.clone()),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .id("copy-rtmp-code-btn")
-                                                            .px_3()
-                                                            .py_2()
-                                                            .rounded(px(6.0))
-                                                            .cursor_pointer()
-                                                            .bg(gpui::transparent_black())
-                                                            .border_1()
-                                                            .border_color(Colors::accent().opacity(0.5))
-                                                            .text_color(Colors::accent())
-                                                            .hover(|s| s.bg(Colors::accent().opacity(0.1)))
-                                                            .text_size(px(11.0))
-                                                            .font_weight(FontWeight::MEDIUM)
-                                                            .child("复制")
-                                                            .on_click({
-                                                                let code = info.code.clone();
-                                                                move |_event, _window, cx| {
-                                                                    cx.write_to_clipboard(
-                                                                        ClipboardItem::new_string(code.clone()),
-                                                                    );
-                                                                }
-                                                            }),
-                                                    ),
-                                            ),
-                                    ),
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(Colors::error())
+                                    .child("房间号无效，请检查输入"),
                             )
                         }),
                 ),
@@ -1513,7 +982,7 @@ impl SettingView {
             0 => SettingsTab::Basic,
             1 => SettingsTab::Window,
             2 => SettingsTab::Appearance,
-            3 => SettingsTab::Tts,
+            3 => SettingsTab::Nicknames,
             4 => SettingsTab::Advanced,
             5 => SettingsTab::About,
             _ => SettingsTab::Basic,
@@ -1523,24 +992,19 @@ impl SettingView {
             SettingsTab::Basic => self.render_basic_tab(window, cx).into_any_element(),
             SettingsTab::Window => self.render_window_tab(cx).into_any_element(),
             SettingsTab::Appearance => self.render_appearance_tab(window, cx).into_any_element(),
-            SettingsTab::Tts => self.render_tts_tab(cx, window).into_any_element(),
+            SettingsTab::Nicknames => self.render_nicknames_tab(window, cx).into_any_element(),
             SettingsTab::Advanced => self.render_advanced_tab(cx).into_any_element(),
             SettingsTab::About => self.render_about_tab(cx).into_any_element(),
         }
     }
 
     fn render_basic_tab(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let is_owner = self.is_room_owner();
-
         v_flex()
             .w_full()
             .p_6()
             .gap_4()
             .child(self.render_account_section(cx))
             .child(self.render_room_section(window, cx))
-            .when(is_owner, |this| {
-                this.child(self.render_live_controls_section(cx))
-            })
             .child(self.render_merge_section(window, cx))
     }
 
@@ -1960,15 +1424,7 @@ impl SettingView {
         let entity = cx.entity().clone();
         let on_theme_change = self.on_theme_change.clone();
 
-        let themes = vec![
-            ("light", "浅色"),
-            ("dark", "深色"),
-            ("dracula", "Dracula"),
-            ("catppuccin", "Catppuccin"),
-            ("blueberry", "蓝莓"),
-            ("ayu-light", "Ayu 浅色"),
-            ("ayu-dark", "Ayu 深色"),
-        ];
+        let themes = vec![("light", "浅色"), ("dark", "深色")];
 
         // Create opacity slider state
         struct OpacitySliderWrapper {
@@ -2136,260 +1592,6 @@ impl SettingView {
                         .child(div().w_full().child(Slider::new(&slider_state))),
                 ),
         )
-    }
-
-    fn render_tts_tab(&self, cx: &mut Context<Self>, window: &mut Window) -> impl IntoElement {
-        let settings = self.settings.clone();
-        let tts_enabled = settings.read().tts_enabled;
-        let gift_tts = settings.read().gift_tts;
-        let sc_tts = settings.read().sc_tts;
-        let current_volume = settings.read().tts_volume;
-        let entity = cx.entity().clone();
-        let entity2 = cx.entity().clone();
-        let entity3 = cx.entity().clone();
-
-        let providers = vec![
-            ("system", "系统"),
-            ("aliyun", "阿里云"),
-            ("custom", "自定义"),
-        ];
-
-        // Clone callbacks for use in closures
-        let on_tts_test = self.on_tts_test.clone();
-
-        // Create volume slider state
-        struct VolumeSliderWrapper {
-            slider: Entity<SliderState>,
-            subscribed: bool,
-        }
-
-        let initial_volume = current_volume;
-        let volume_slider_state = window.use_keyed_state(
-            SharedString::from("tts-volume-slider-state"),
-            cx,
-            move |_window, cx| {
-                let slider = cx.new(|_| {
-                    SliderState::new()
-                        .min(0.0)
-                        .max(1.0)
-                        .step(0.01)
-                        .default_value(initial_volume)
-                });
-                VolumeSliderWrapper {
-                    slider,
-                    subscribed: false,
-                }
-            },
-        );
-
-        let slider_state = volume_slider_state.read(cx).slider.clone();
-        let is_subscribed = volume_slider_state.read(cx).subscribed;
-
-        // Sync slider value with current volume
-        slider_state.update(cx, |state, cx| {
-            let slider_value = state.value().start();
-            if (slider_value - current_volume).abs() > 0.001 {
-                state.set_value(current_volume, window, cx);
-            }
-        });
-
-        // Subscribe to slider change events only once
-        if !is_subscribed {
-            let settings_for_slider = self.settings.clone();
-            let on_tts_volume_change = self.on_tts_volume_change.clone();
-
-            cx.subscribe_in(
-                &slider_state,
-                window,
-                move |_view, _, event: &SliderEvent, window, cx| {
-                    let SliderEvent::Change(value) = event;
-                    let volume = value.start();
-                    settings_for_slider.write().tts_volume = volume;
-                    if let Some(ref callback) = on_tts_volume_change {
-                        callback(volume, window, cx);
-                    }
-                    cx.notify();
-                },
-            )
-            .detach();
-
-            volume_slider_state.write(
-                cx,
-                VolumeSliderWrapper {
-                    slider: slider_state.clone(),
-                    subscribed: true,
-                },
-            );
-        }
-
-        let volume_percent = format!("{}%", (current_volume * 100.0).round() as i32);
-
-        v_flex()
-            .w_full()
-            .p_6()
-            .gap_4()
-            .child(
-                self.render_section_card(
-                    v_flex()
-                        .w_full()
-                        .child(self.render_section_title("TTS 配置"))
-                        .child(
-                            v_flex()
-                                .w_full()
-                                .py_2()
-                                .gap_3()
-                                .child(
-                                    v_flex()
-                                        .w_full()
-                                        .gap_2()
-                                        .child(
-                                            h_flex()
-                                                .w_full()
-                                                .justify_between()
-                                                .items_center()
-                                                .child(
-                                                    v_flex()
-                                                        .gap_1()
-                                                        .child(
-                                                            div()
-                                                                .text_size(px(13.0))
-                                                                .text_color(Colors::text_primary())
-                                                                .child("TTS 音量"),
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .text_size(px(11.0))
-                                                                .text_color(Colors::text_muted())
-                                                                .child("调整语音播报音量"),
-                                                        ),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_size(px(13.0))
-                                                        .text_color(Colors::text_secondary())
-                                                        .child(volume_percent),
-                                                ),
-                                        )
-                                        .child(
-                                            div().w_full().child(Slider::new(&slider_state)),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .id("tts-test-btn")
-                                        .w_full()
-                                        .px_3()
-                                        .py_2()
-                                        .rounded(px(6.0))
-                                        .cursor_pointer()
-                                        .bg(Colors::accent())
-                                        .hover(|s| s.opacity(0.8))
-                                        .text_size(px(13.0))
-                                        .text_color(Colors::button_text())
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .child("测试 TTS")
-                                        .on_click(move |_event, window, cx| {
-                                            tracing::info!("TTS test clicked");
-                                            if let Some(ref callback) = on_tts_test {
-                                                callback(window, cx);
-                                            }
-                                        }),
-                                )
-                                .child(
-                                    v_flex()
-                                        .w_full()
-                                        .gap_2()
-                                        .child(
-                                            div()
-                                                .text_size(px(13.0))
-                                                .text_color(Colors::text_primary())
-                                                .child("TTS 声源"),
-                                        )
-                                        .child(
-                                            h_flex()
-                                                .w_full()
-                                                .gap_2()
-                                                .children(providers.into_iter().map(|(id, name)| {
-                                                    let is_selected = id == "system";
-                                                    div()
-                                                        .id(SharedString::from(format!("tts-provider-{}", id)))
-                                                        .px_3()
-                                                        .py_2()
-                                                        .rounded(px(6.0))
-                                                        .cursor_pointer()
-                                                        .border_1()
-                                                        .when(is_selected, |this| {
-                                                            this.border_color(Colors::accent())
-                                                                .bg(Colors::accent().opacity(0.1))
-                                                        })
-                                                        .when(!is_selected, |this| {
-                                                            this.border_color(Colors::bg_hover())
-                                                                .hover(|s| s.bg(Colors::bg_hover()))
-                                                        })
-                                                        .text_size(px(12.0))
-                                                        .text_color(Colors::text_primary())
-                                                        .child(name)
-                                                        .on_click(cx.listener(move |_this, _event, _window, cx| {
-                                                            tracing::info!("TTS provider selected: {}", id);
-                                                            cx.notify();
-                                                        }))
-                                                })),
-                                        ),
-                                ),
-                        ),
-                ),
-            )
-            .child(
-                self.render_section_card(
-                    v_flex()
-                        .w_full()
-                        .child(self.render_section_title("语音合成"))
-                        .child(self.render_setting_row(
-                            "弹幕语音",
-                            "朗读弹幕内容",
-                            Switch::new("tts_enabled").checked(tts_enabled).on_click({
-                                let settings = settings.clone();
-                                move |checked: &bool, _window, cx| {
-                                    settings.write().tts_enabled = *checked;
-                                    entity.update(cx, |this, cx| {
-                                        this.notify_tts_enabled_change(_window, cx);
-                                        cx.notify();
-                                    });
-                                }
-                            }),
-                        ))
-                        .child(self.render_setting_row(
-                            "礼物语音",
-                            "朗读礼物通知",
-                            Switch::new("gift_tts").checked(gift_tts).on_click({
-                                let settings = settings.clone();
-                                move |checked: &bool, _window, cx| {
-                                    settings.write().gift_tts = *checked;
-                                    entity2.update(cx, |this, cx| {
-                                        this.notify_tts_enabled_change(_window, cx);
-                                        cx.notify();
-                                    });
-                                }
-                            }),
-                        ))
-                        .child(self.render_setting_row(
-                            "醒目留言语音",
-                            "朗读醒目留言内容",
-                            Switch::new("sc_tts").checked(sc_tts).on_click({
-                                let settings = settings.clone();
-                                move |checked: &bool, _window, cx| {
-                                    settings.write().sc_tts = *checked;
-                                    entity3.update(cx, |this, cx| {
-                                        this.notify_tts_enabled_change(_window, cx);
-                                        cx.notify();
-                                    });
-                                }
-                            }),
-                        )),
-                ),
-            )
     }
 
     fn render_advanced_tab(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2716,6 +1918,201 @@ impl SettingView {
             })
     }
 
+    fn render_nicknames_tab(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        // Lazily create the "add nickname" form input states the first time the
+        // tab is entered.
+        if self.add_nickname_uid_input.is_none() {
+            let uid_input = cx.new(|cx| {
+                InputState::new(window, cx).placeholder("UID(数字)")
+            });
+            self.add_nickname_uid_input = Some(uid_input);
+        }
+        if self.add_nickname_name_input.is_none() {
+            let name_input = cx.new(|cx| {
+                InputState::new(window, cx).placeholder("昵称")
+            });
+            self.add_nickname_name_input = Some(name_input);
+        }
+
+        // Build a sorted snapshot of nicknames (by uid ascending) and make sure
+        // an InputState entity exists for each row.
+        let mut entries: Vec<(u64, String)> = self
+            .nicknames
+            .read()
+            .iter()
+            .map(|(uid, nick)| (*uid, nick.clone()))
+            .collect();
+        entries.sort_by_key(|(uid, _)| *uid);
+
+        for (uid, nick) in entries.iter() {
+            if !self.nickname_edit_inputs.contains_key(uid) {
+                let default = nick.clone();
+                let input = cx.new(|cx| {
+                    InputState::new(window, cx).default_value(default)
+                });
+                self.nickname_edit_inputs.insert(*uid, input);
+            }
+        }
+
+        let add_uid = self.add_nickname_uid_input.as_ref().unwrap().clone();
+        let add_name = self.add_nickname_name_input.as_ref().unwrap().clone();
+        let on_set = self.on_set_nickname.clone();
+
+        let add_card = self.render_section_card(
+            v_flex()
+                .w_full()
+                .child(self.render_section_title("添加昵称"))
+                .child(
+                    v_flex()
+                        .w_full()
+                        .gap_2()
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .gap_2()
+                                .items_center()
+                                .child(div().flex_1().child(Input::new(&add_uid)))
+                                .child(div().flex_1().child(Input::new(&add_name)))
+                                .child({
+                                    let add_uid = add_uid.clone();
+                                    let add_name = add_name.clone();
+                                    let on_set = on_set.clone();
+                                    div()
+                                        .id("nickname-add-btn")
+                                        .px_3()
+                                        .py(px(6.0))
+                                        .rounded(px(4.0))
+                                        .cursor_pointer()
+                                        .bg(Colors::accent())
+                                        .hover(|s| s.opacity(0.8))
+                                        .text_size(px(12.0))
+                                        .text_color(Colors::button_text())
+                                        .child("添加")
+                                        .on_click(move |_event, window, cx| {
+                                            let uid_text = add_uid.read(cx).text().to_string();
+                                            let nick_text =
+                                                add_name.read(cx).text().to_string();
+                                            let uid = match uid_text.trim().parse::<u64>() {
+                                                Ok(v) => v,
+                                                Err(_) => return,
+                                            };
+                                            let nick = nick_text.trim().to_string();
+                                            if nick.is_empty() {
+                                                return;
+                                            }
+                                            if let Some(ref cb) = on_set {
+                                                cb(uid, Some(nick), window, cx);
+                                            }
+                                            // Reset the form
+                                            add_uid.update(cx, |s, cx| {
+                                                s.set_value("", window, cx);
+                                            });
+                                            add_name.update(cx, |s, cx| {
+                                                s.set_value("", window, cx);
+                                            });
+                                        })
+                                }),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(Colors::text_muted())
+                                .child("用户 UID 是 B 站用户的数字 ID"),
+                        ),
+                ),
+        );
+
+        let mut list_body = v_flex().w_full().gap_2();
+        if entries.is_empty() {
+            list_body = list_body.child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(Colors::text_muted())
+                    .py_4()
+                    .child("尚未设置任何昵称"),
+            );
+        } else {
+            for (uid, _nick) in entries.iter() {
+                let uid = *uid;
+                let input = self.nickname_edit_inputs.get(&uid).unwrap().clone();
+                let on_set_save = on_set.clone();
+                let on_set_delete = on_set.clone();
+                let input_for_save = input.clone();
+                list_body = list_body.child(
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            div()
+                                .min_w(px(96.0))
+                                .text_size(px(12.0))
+                                .text_color(Colors::text_secondary())
+                                .child(format!("{}", uid)),
+                        )
+                        .child(div().flex_1().child(Input::new(&input)))
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("nick-save-{}", uid)))
+                                .px_2()
+                                .py(px(5.0))
+                                .rounded(px(4.0))
+                                .cursor_pointer()
+                                .bg(Colors::accent())
+                                .hover(|s| s.opacity(0.8))
+                                .text_size(px(11.0))
+                                .text_color(Colors::button_text())
+                                .child("保存")
+                                .on_click(move |_event, window, cx| {
+                                    let text = input_for_save.read(cx).text().to_string();
+                                    let trimmed = text.trim().to_string();
+                                    let payload =
+                                        if trimmed.is_empty() { None } else { Some(trimmed) };
+                                    if let Some(ref cb) = on_set_save {
+                                        cb(uid, payload, window, cx);
+                                    }
+                                }),
+                        )
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("nick-del-{}", uid)))
+                                .px_2()
+                                .py(px(5.0))
+                                .rounded(px(4.0))
+                                .cursor_pointer()
+                                .bg(Colors::error())
+                                .hover(|s| s.opacity(0.8))
+                                .text_size(px(11.0))
+                                .text_color(gpui::white())
+                                .child("删除")
+                                .on_click(move |_event, window, cx| {
+                                    if let Some(ref cb) = on_set_delete {
+                                        cb(uid, None, window, cx);
+                                    }
+                                }),
+                        ),
+                );
+            }
+        }
+        let list_card = self.render_section_card(
+            v_flex()
+                .w_full()
+                .child(self.render_section_title("已有昵称"))
+                .child(list_body),
+        );
+
+        v_flex()
+            .w_full()
+            .p_6()
+            .gap_4()
+            .child(add_card)
+            .child(list_card)
+    }
+
     fn render_about_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .w_full()
@@ -2749,7 +2146,7 @@ impl SettingView {
                                                 .text_size(px(28.0))
                                                 .font_weight(FontWeight::BOLD)
                                                 .text_color(Colors::text_primary())
-                                                .child("J"),
+                                                .child("K"),
                                         )
                                         .child(
                                             v_flex()
@@ -2759,7 +2156,7 @@ impl SettingView {
                                                         .text_size(px(18.0))
                                                         .font_weight(FontWeight::SEMIBOLD)
                                                         .text_color(Colors::text_primary())
-                                                        .child("JLiverTool"),
+                                                        .child("KumoTool"),
                                                 )
                                                 .child(
                                                     div()
@@ -2834,7 +2231,7 @@ impl SettingView {
                                         .bg(Colors::bg_secondary())
                                         .hover(|s| s.bg(Colors::bg_hover()))
                                         .on_click(cx.listener(|_this, _event, _window, cx| {
-                                            cx.open_url("https://github.com/Xinrea/JLiverTool");
+                                            cx.open_url("https://github.com/kumolive/KumoDanmu");
                                         }))
                                         .child(
                                             h_flex()
@@ -2866,7 +2263,7 @@ impl SettingView {
                                         .bg(Colors::bg_secondary())
                                         .hover(|s| s.bg(Colors::bg_hover()))
                                         .on_click(cx.listener(|_this, _event, _window, cx| {
-                                            cx.open_url("https://github.com/Xinrea/JLiverTool/issues");
+                                            cx.open_url("https://github.com/kumolive/KumoDanmu/issues");
                                         }))
                                         .child(
                                             h_flex()
@@ -3099,73 +2496,5 @@ impl Render for SettingView {
                             ),
                     ),
             )
-            // Face auth dialog overlay
-            .when(self.show_face_auth_dialog, |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .bg(gpui::black().opacity(0.5))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            v_flex()
-                                .w(px(320.0))
-                                .p_6()
-                                .rounded(px(12.0))
-                                .bg(Colors::bg_primary())
-                                .border_1()
-                                .border_color(Colors::bg_hover())
-                                .gap_4()
-                                .child(
-                                    h_flex()
-                                        .w_full()
-                                        .items_center()
-                                        .justify_between()
-                                        .child(
-                                            div()
-                                                .text_size(px(16.0))
-                                                .font_weight(FontWeight::BOLD)
-                                                .text_color(Colors::text_primary())
-                                                .child("人脸认证"),
-                                        )
-                                        .child(
-                                            div()
-                                                .id("close-face-auth")
-                                                .cursor_pointer()
-                                                .p_1()
-                                                .rounded(px(4.0))
-                                                .hover(|s| s.bg(Colors::bg_hover()))
-                                                .text_color(Colors::text_muted())
-                                                .child("✕")
-                                                .on_click(cx.listener(|view, _event, _window, cx| {
-                                                    view.hide_face_auth_dialog(cx);
-                                                })),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(13.0))
-                                        .text_color(Colors::text_secondary())
-                                        .child("请使用哔哩哔哩APP扫描下方二维码完成人脸认证"),
-                                )
-                                .child(
-                                    div()
-                                        .w_full()
-                                        .flex()
-                                        .justify_center()
-                                        .child(self.face_auth_qr_view.clone()),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(12.0))
-                                        .text_color(Colors::text_muted())
-                                        .text_align(gpui::TextAlign::Center)
-                                        .child("认证完成后请重新点击开始直播"),
-                                ),
-                        ),
-                )
-            })
     }
 }

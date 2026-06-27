@@ -3,11 +3,11 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "3.0.9"
+version = "0.1.0"
 edition = "2021"
-authors = ["JLiverTool Contributors"]
+authors = ["JLiverTool Contributors", "KumoTool Contributors"]
 license = "MIT"
-repository = "https://github.com/your-repo/jlivertool"
+repository = "https://github.com/kumolive/KumoDanmu"
 
 [workspace.dependencies]
 # GPUI Framework
@@ -64,10 +64,6 @@ async-trait = "0.1"
 
 # Logging
 log = "0.4"
-
-# Webview
-wry = "0.50"
-tao = "0.32"
 
 # Open URLs
 open = "5"

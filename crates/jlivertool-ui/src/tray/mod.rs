@@ -70,7 +70,7 @@ impl TrayManager {
         // Create the tray icon
         let tray_icon = TrayIconBuilder::new()
             .with_menu(Box::new(menu.clone()))
-            .with_tooltip("JLiverTool")
+            .with_tooltip("KumoTool")
             .with_icon(icon)
             .build()?;
 
@@ -101,9 +101,9 @@ impl TrayManager {
         // Update tooltip
         let tooltip = if let Some(room_id) = state.room_id {
             let status = if state.live_status == 1 { "直播中" } else { "未开播" };
-            format!("JLiverTool - {} ({})", room_id, status)
+            format!("KumoTool - {} ({})", room_id, status)
         } else {
-            "JLiverTool".to_string()
+            "KumoTool".to_string()
         };
 
         if let Err(e) = self.tray_icon.set_tooltip(Some(&tooltip)) {

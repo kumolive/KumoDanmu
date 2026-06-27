@@ -16,12 +16,6 @@ fn current_theme() -> &'static RwLock<ThemeColors> {
 pub fn set_theme(name: &str) {
     let theme = match name {
         "light" => ThemeColors::light(),
-        "dark" => ThemeColors::dark(),
-        "dracula" => ThemeColors::dracula(),
-        "catppuccin" => ThemeColors::catppuccin(),
-        "blueberry" => ThemeColors::blueberry(),
-        "ayu-light" => ThemeColors::ayu_light(),
-        "ayu-dark" => ThemeColors::ayu_dark(),
         _ => ThemeColors::dark(),
     };
     *current_theme().write() = theme;
@@ -159,95 +153,6 @@ impl ThemeColors {
         }
     }
 
-    /// Dracula theme
-    pub fn dracula() -> Self {
-        Self {
-            titlebar_bg: rgb_to_hsla(53, 55, 70),         // #353746
-            titlebar_text: rgb_to_hsla(248, 248, 242),    // #f8f8f2
-            statusbar_bg: rgb_to_hsla(53, 55, 70),        // #353746
-            statusbar_text: rgb_to_hsla(248, 248, 242),   // #f8f8f2
-            main_bg: (25, 26, 33),
-            gift_bg: (33, 34, 41),
-            live_color: rgb_to_hsla(249, 129, 198),       // #f981c6
-            border: rgb_to_hsla(93, 109, 152),            // #5d6d98
-            uname_color: rgb_to_hsla(172, 139, 224),      // #ac8be0
-            font_color: rgb_to_hsla(234, 236, 233),       // #eaece9
-            danmu_special_bg: (20, 31, 39),
-            button_text: rgb_to_hsla(255, 255, 255),      // white text on buttons
-        }
-    }
-
-    /// Catppuccin theme
-    pub fn catppuccin() -> Self {
-        Self {
-            titlebar_bg: rgb_to_hsla(35, 38, 52),         // #232634
-            titlebar_text: rgb_to_hsla(248, 248, 242),    // #f8f8f2
-            statusbar_bg: rgb_to_hsla(35, 38, 52),        // #232634
-            statusbar_text: rgb_to_hsla(248, 248, 242),   // #f8f8f2
-            main_bg: (48, 52, 70),
-            gift_bg: (54, 59, 73),
-            live_color: rgb_to_hsla(239, 159, 118),       // #ef9f76
-            border: rgb_to_hsla(93, 109, 152),            // #5d6d98
-            uname_color: rgb_to_hsla(166, 209, 137),      // #a6d189
-            font_color: rgb_to_hsla(234, 236, 233),       // #eaece9
-            danmu_special_bg: (20, 31, 39),
-            button_text: rgb_to_hsla(30, 30, 46),         // dark text for light green buttons
-        }
-    }
-
-    /// Blueberry theme
-    pub fn blueberry() -> Self {
-        Self {
-            titlebar_bg: rgb_to_hsla(25, 29, 40),         // #191d28
-            titlebar_text: rgb_to_hsla(220, 236, 251),    // #dcecfb
-            statusbar_bg: rgb_to_hsla(25, 29, 40),        // #191d28
-            statusbar_text: rgb_to_hsla(220, 236, 251),   // #dcecfb
-            main_bg: (29, 33, 48),
-            gift_bg: (30, 37, 51),
-            live_color: rgb_to_hsla(223, 69, 119),        // #df4577
-            border: rgb_to_hsla(57, 62, 90),              // #393e5a
-            uname_color: rgb_to_hsla(40, 130, 96),        // #288260
-            font_color: rgb_to_hsla(228, 236, 230),       // #e4ece6
-            danmu_special_bg: (36, 41, 57),
-            button_text: rgb_to_hsla(255, 255, 255),      // white text on buttons
-        }
-    }
-
-    /// Ayu Light theme
-    pub fn ayu_light() -> Self {
-        Self {
-            titlebar_bg: rgb_to_hsla(252, 172, 41),       // #fcac29
-            titlebar_text: rgb_to_hsla(250, 250, 250),    // #fafafa
-            statusbar_bg: rgb_to_hsla(250, 250, 250),     // #fafafa
-            statusbar_text: rgb_to_hsla(108, 120, 131),   // #6c7883
-            main_bg: (250, 250, 250),
-            gift_bg: (255, 255, 255),
-            live_color: rgb_to_hsla(209, 64, 71),         // #d14047
-            border: rgb_to_hsla(220, 222, 225),           // #dcdee1
-            uname_color: rgb_to_hsla(255, 135, 30),       // #ff871e
-            font_color: rgb_to_hsla(106, 118, 129),       // #6a7681
-            danmu_special_bg: (240, 241, 242),
-            button_text: rgb_to_hsla(255, 255, 255),      // white text on orange buttons
-        }
-    }
-
-    /// Ayu Dark theme
-    pub fn ayu_dark() -> Self {
-        Self {
-            titlebar_bg: rgb_to_hsla(9, 14, 21),          // #090e15
-            titlebar_text: rgb_to_hsla(255, 255, 255),    // white
-            statusbar_bg: rgb_to_hsla(9, 14, 21),         // #090e15
-            statusbar_text: rgb_to_hsla(255, 255, 255),   // white
-            main_bg: (9, 14, 21),
-            gift_bg: (40, 37, 48),
-            live_color: rgb_to_hsla(200, 93, 85),         // #c85d55
-            border: rgb_to_hsla(57, 62, 90),              // #393e5a
-            uname_color: rgb_to_hsla(255, 137, 34),       // #ff8922
-            font_color: rgb_to_hsla(179, 177, 173),       // #b3b1ad
-            danmu_special_bg: (0, 6, 15),
-            button_text: rgb_to_hsla(255, 255, 255),      // white text on orange buttons
-        }
-    }
 }
 
 /// Convert RGB values to Hsla

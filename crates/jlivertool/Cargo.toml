@@ -33,7 +33,6 @@ anyhow = { workspace = true }
 
 # Utilities
 parking_lot = { workspace = true }
-directories = { workspace = true }
 
 # Notifications
 notify-rust = { workspace = true }
@@ -45,10 +44,10 @@ core-text = { workspace = true }
 winresource = "0.1"
 
 [package.metadata.packager]
-product-name = "JLiverTool"
-identifier = "com.xinrea.jlivertool"
+product-name = "KumoDanmu"
+identifier = "com.kumo.kumodanmu"
 description = "Simple Bilibili Danmaku Tool"
-homepage = "https://github.com/Xinrea/JLiveTool"
+homepage = "https://github.com/kumolive/KumoDanmu"
 icons = ["../../icons/icon.icns", "../../icons/icon.ico", "../../icons/icon.png"]
 
 [package.metadata.packager.macos]

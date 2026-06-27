@@ -9,11 +9,13 @@ use chrono::{Local, TimeZone};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::h_flex;
+use gpui_component::input::{Input, InputState};
 use gpui_component::v_flex;
 use jlivertool_core::bilibili::api::UserInfoData;
 use jlivertool_core::types::Sender;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// Selected user data with optional fetched info
 #[derive(Clone)]
@@ -26,14 +28,24 @@ pub struct SelectedUser {
 /// Shared state for user info popup
 pub type SelectedUserState = Rc<RefCell<Option<SelectedUser>>>;
 
+/// Callback type for nickname save / delete actions inside the popup.
+/// `None` argument means "delete this nickname".
+pub type NicknameSaveCallback =
+    Arc<dyn Fn(Option<String>, &mut Window, &mut App) + Send + Sync>;
+
 /// User info card for tooltip
 pub struct UserInfoCard;
 
 impl UserInfoCard {
-    /// Create the user info card element directly (for use in Tooltip::element)
+    /// Create the user info card element directly.
+    /// `nickname_input` and `on_save` come from MainView, which owns the
+    /// per-uid InputState and forwards saves through `UiCommand::SetNickname`.
     pub fn render_element(
         selected: &SelectedUser,
         danmu_history: Vec<(String, i64)>,
+        current_nickname: Option<&str>,
+        nickname_input: Entity<InputState>,
+        on_save: NicknameSaveCallback,
     ) -> impl IntoElement {
         let sender = &selected.sender;
         let uid = sender.uid;
@@ -398,6 +410,66 @@ impl UserInfoCard {
                                 .child(format!("({})", medal.anchor_uname)),
                         ),
                 )
+            })
+            // Nickname row: editable input + save / delete
+            .child({
+                let has_nickname = current_nickname.is_some();
+                let on_save_save = on_save.clone();
+                let on_save_delete = on_save.clone();
+                let input_for_save = nickname_input.clone();
+                v_flex()
+                    .w_full()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(Colors::text_muted())
+                            .child("昵称"),
+                    )
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .gap_2()
+                            .items_center()
+                            .child(div().flex_1().child(Input::new(&nickname_input)))
+                            .child(
+                                div()
+                                    .id("save-nickname-btn")
+                                    .px_2()
+                                    .py(px(5.0))
+                                    .rounded(px(4.0))
+                                    .cursor_pointer()
+                                    .bg(Colors::accent())
+                                    .hover(|s| s.opacity(0.8))
+                                    .text_size(px(11.0))
+                                    .text_color(gpui::white())
+                                    .child("保存")
+                                    .on_click(move |_, window, cx| {
+                                        let text = input_for_save.read(cx).text().to_string();
+                                        let trimmed = text.trim().to_string();
+                                        let payload = if trimmed.is_empty() { None } else { Some(trimmed) };
+                                        on_save_save(payload, window, cx);
+                                    }),
+                            )
+                            .when(has_nickname, |this| {
+                                this.child(
+                                    div()
+                                        .id("delete-nickname-btn")
+                                        .px_2()
+                                        .py(px(5.0))
+                                        .rounded(px(4.0))
+                                        .cursor_pointer()
+                                        .bg(Colors::error())
+                                        .hover(|s| s.opacity(0.8))
+                                        .text_size(px(11.0))
+                                        .text_color(gpui::white())
+                                        .child("删除")
+                                        .on_click(move |_, window, cx| {
+                                            on_save_delete(None, window, cx);
+                                        }),
+                                )
+                            }),
+                    )
             })
             // Action buttons row
             .child(

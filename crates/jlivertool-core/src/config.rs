@@ -14,7 +14,7 @@ use tracing::{debug, info, warn};
 
 /// Configuration store version
 const CONFIG_VERSION: u32 = 2;
-const CONFIG_FILENAME: &str = "config_v2.json";
+const CONFIG_FILENAME: &str = "config.json";
 
 /// Custom serialization for cookies - encodes as base64
 mod encoded_cookies {
@@ -201,7 +201,7 @@ fn default_opacity() -> f32 {
 }
 
 fn default_medal_display() -> bool {
-    true
+    false
 }
 
 fn default_theme() -> String {
@@ -275,9 +275,11 @@ struct ConfigStoreInner {
 impl ConfigStore {
     /// Create a new config store, loading from file if exists
     pub fn new() -> Result<Self> {
-        let config_dir = directories::ProjectDirs::from("com", "jlivertool", "JLiverTool")
-            .map(|d| d.config_dir().to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."));
+        let config_dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+            .map(|p| p.join("data"))
+            .unwrap_or_else(|| PathBuf::from("./data"));
 
         std::fs::create_dir_all(&config_dir)?;
 

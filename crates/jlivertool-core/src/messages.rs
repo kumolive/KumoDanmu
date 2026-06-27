@@ -7,31 +7,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 /// Dynamic emoji map: maps emoji text to WebP URL for animated emojis
-static DYNAMIC_EMOJI_MAP: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
-    let mut map = HashMap::new();
-    // 轴伊Joi收藏集动态表情包
-    map.insert("[轴伊Joi收藏集动态表情包_跑了]", "https://i0.hdslb.com/bfs/garb/3c6551d38c726273798e1cc1e488a3d0633bad5e.webp");
-    map.insert("[轴伊Joi收藏集动态表情包_鞠躬]", "https://i0.hdslb.com/bfs/garb/13fc84be85e70ccd8b12acc8e96e49203e96b1a9.webp");
-    map.insert("[轴伊Joi收藏集动态表情包_摇你]", "https://i0.hdslb.com/bfs/garb/ec27426348fafa3286412d04e8ea851a7a84ce6e.webp");
-    map.insert("[轴伊Joi收藏集动态表情包_愤怒]", "https://i0.hdslb.com/bfs/garb/5fbc1bda6a6d73b83e51cba2119ea65d0dc74689.webp");
-    map.insert("[轴伊Joi收藏集动态表情包_猴]", "https://i0.hdslb.com/bfs/garb/4c7be23a801094ea00452a2da5ce3184336df331.webp");
-    map.insert("[轴伊Joi收藏集动态表情包_NO]", "https://i0.hdslb.com/bfs/garb/5d124a80db426608c48c76b27d790c711d39b7b7.webp");
-    map.insert("[轴伊Joi收藏集动态表情包_贴贴]", "https://i0.hdslb.com/bfs/garb/b02b9ebd543b2ee63573daffa191e8a76b7bb384.webp");
-    map.insert("[轴伊Joi收藏集动态表情包_kksk]", "https://i0.hdslb.com/bfs/garb/518c5b00cdb1329ae8e26d50c52369394d7a2394.webp");
-    map.insert("[轴伊Joi收藏集动态表情包_这辈子完了]", "https://i0.hdslb.com/bfs/garb/85464aa487412c66ab24543a86218fa82fff7f23.webp");
-    map.insert("[轴伊Joi收藏集动态表情包_呆]", "https://i0.hdslb.com/bfs/garb/09a0bd1deaa02a4255dc886642123dfe2606ddb8.webp");
-    map.insert("[轴伊Joi收藏集动态表情包_唔唔]", "https://i0.hdslb.com/bfs/garb/c82df0783d3cba6af8cebaa43c1f36b1ef3cc0f4.webp");
-    map.insert("[轴伊Joi收藏集动态表情包_啊这]", "https://i0.hdslb.com/bfs/garb/03e899fb3c823cf337b50100718247f25955ee4b.webp");
-    map.insert("[轴伊Joi收藏集动态表情包_失落]", "https://i0.hdslb.com/bfs/garb/dc085a527f49bedf897d08de2bb07fa7c779641b.webp");
-    map.insert("[轴伊Joi收藏集动态表情包_神气]", "https://i0.hdslb.com/bfs/garb/8ed028a87af6c2ef79cdd654f3076d7f7f836514.webp");
-    map.insert("[轴伊Joi收藏集动态表情包_怎么这样]", "https://i0.hdslb.com/bfs/garb/7e239e9ee33a8e168df4bba58cd9a18c40d9af45.webp");
-    map.insert("[轴伊Joi收藏集动态表情包_尼嘻嘻]", "https://i0.hdslb.com/bfs/garb/278ebc1d82a220a127aa60a10b461dbbc71040c6.webp");
-    map.insert("[轴伊Joi收藏集动态表情包_惊]", "https://i0.hdslb.com/bfs/garb/82f222eebba1160d81244d578dda1c4724276056.webp");
-    map.insert("[轴伊Joi收藏集动态表情包_害怕]", "https://i0.hdslb.com/bfs/garb/4c00a15ab814a8855e3b7106cdc43c1f0a8fa640.webp");
-    map.insert("[轴伊Joi收藏集动态表情包_睡觉]", "https://i0.hdslb.com/bfs/garb/dbec05c6adfd3c56c4fa484b00e4095b4d17cec7.webp");
-    map.insert("[轴伊Joi收藏集动态表情包_爆]", "https://i0.hdslb.com/bfs/garb/b7e50a289001583cd06eb1149304149ba5ccc78b.webp");
-    map
-});
+static DYNAMIC_EMOJI_MAP: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| HashMap::new());
 
 /// Danmaku message
 #[derive(Debug, Clone, Serialize, Deserialize)]

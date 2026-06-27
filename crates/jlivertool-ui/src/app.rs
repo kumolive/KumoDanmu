@@ -85,6 +85,10 @@ pub enum UiCommand {
     CheckForUpdate,
     /// Update auto-update check setting
     UpdateAutoUpdateCheck(bool),
+    /// Fetch all saved nicknames (emits Event::NicknamesLoaded)
+    FetchNicknames,
+    /// Create / update (Some) or remove (None) a nickname for a uid
+    SetNickname { uid: u64, nickname: Option<String> },
 }
 
 /// Wrapper for event receiver with a flag to indicate pending events
@@ -145,7 +149,7 @@ pub fn run_app(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("JLiverTool".into()),
+                    title: Some("KumoTool".into()),
                     appears_transparent: true,
                     ..Default::default()
                 }),
@@ -250,7 +254,7 @@ pub fn run_app_with_tray(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     titlebar: Some(TitlebarOptions {
-                        title: Some("JLiverTool".into()),
+                        title: Some("KumoTool".into()),
                         appears_transparent: true,
                         ..Default::default()
                     }),

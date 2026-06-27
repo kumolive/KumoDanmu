@@ -6,7 +6,7 @@ use serde::Deserialize;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-const GITHUB_API_URL: &str = "https://api.github.com/repos/Xinrea/JLiverTool/releases/latest";
+const GITHUB_API_URL: &str = "https://api.github.com/repos/kumolive/KumoDanmu/releases/latest";
 
 /// GitHub release information
 #[derive(Debug, Clone, Deserialize)]
@@ -34,7 +34,7 @@ pub async fn check_for_update(current_version: &str) -> Result<UpdateInfo> {
 
     let client = Client::builder()
         .timeout(Duration::from_secs(10))
-        .user_agent("JLiverTool")
+        .user_agent("KumoTool")
         .build()?;
 
     debug!("Fetching release info from GitHub API");

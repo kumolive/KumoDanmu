@@ -1,5 +1,6 @@
 //! Render methods for MainView
 
+use super::content_rendering::display_name;
 use super::{DanmuListItemView, MainView, UserInfoCard};
 use crate::app::UiCommand;
 use crate::components::draggable_area;
@@ -10,6 +11,28 @@ use gpui_component::h_flex;
 use gpui_component::scroll::Scrollbar;
 use gpui_component::v_flex;
 use std::rc::Rc;
+
+/// Parse a "#RRGGBB" hex color into an `Hsla`, applying the given opacity.
+/// Falls back to a neutral semi-transparent dark color when parsing fails.
+fn parse_sc_hex(hex: &str, opacity: f32) -> Hsla {
+    let s = hex.trim_start_matches('#');
+    let (r, g, b) = if s.len() == 6 {
+        (
+            u8::from_str_radix(&s[0..2], 16).unwrap_or(40),
+            u8::from_str_radix(&s[2..4], 16).unwrap_or(96),
+            u8::from_str_radix(&s[4..6], 16).unwrap_or(178),
+        )
+    } else {
+        (40u8, 96u8, 178u8)
+    };
+    Rgba {
+        r: r as f32 / 255.0,
+        g: g as f32 / 255.0,
+        b: b as f32 / 255.0,
+        a: opacity.clamp(0.0, 1.0),
+    }
+    .into()
+}
 
 impl MainView {
     pub(super) fn render_header(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -76,9 +99,6 @@ impl MainView {
                     .gap_2()
                     .items_center()
                     .child(self.render_pin_button(is_live, cx))
-                    .child(self.render_gift_button(is_live, cx))
-                    .child(self.render_superchat_button(is_live, cx))
-                    .child(self.render_stats_button(is_live, cx))
                     .child(self.render_audience_button(is_live, cx))
                     .child(self.render_settings_button(is_live, cx)),
             )
@@ -111,21 +131,6 @@ impl MainView {
                 crate::platform::set_window_always_on_top(window, always_on_top);
 
                 if let Some(handle) = &this.settings_window {
-                    let _ = cx.update_window(*handle, |_, win, _| {
-                        crate::platform::set_window_always_on_top(win, always_on_top);
-                    });
-                }
-                if let Some(handle) = &this.gift_window {
-                    let _ = cx.update_window(*handle, |_, win, _| {
-                        crate::platform::set_window_always_on_top(win, always_on_top);
-                    });
-                }
-                if let Some(handle) = &this.superchat_window {
-                    let _ = cx.update_window(*handle, |_, win, _| {
-                        crate::platform::set_window_always_on_top(win, always_on_top);
-                    });
-                }
-                if let Some(handle) = &this.statistics_window {
                     let _ = cx.update_window(*handle, |_, win, _| {
                         crate::platform::set_window_always_on_top(win, always_on_top);
                     });
@@ -165,122 +170,6 @@ impl MainView {
                             .h(px(6.0))
                             .bg(icon_color),
                     ),
-            )
-    }
-
-    fn render_gift_button(&self, is_live: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let icon_color = if is_live {
-            hsla(0.0, 0.0, 1.0, 0.7)
-        } else {
-            Colors::text_muted()
-        };
-
-        div()
-            .id("gift-window-btn")
-            .size(px(24.0))
-            .rounded(px(4.0))
-            .cursor_pointer()
-            .flex()
-            .items_center()
-            .justify_center()
-            .hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.2)))
-            .on_click(cx.listener(|this, _event, window, cx| {
-                this.open_gift_window(window, cx);
-            }))
-            .child(
-                div()
-                    .size(px(14.0))
-                    .relative()
-                    .child(
-                        div()
-                            .absolute()
-                            .bottom_0()
-                            .left_0()
-                            .right_0()
-                            .h(px(9.0))
-                            .border_1()
-                            .border_color(icon_color)
-                            .rounded_b(px(2.0)),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(2.0))
-                            .left(px(-1.0))
-                            .right(px(-1.0))
-                            .h(px(3.0))
-                            .border_1()
-                            .border_color(icon_color)
-                            .rounded_t(px(1.0)),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(5.0))
-                            .bottom_0()
-                            .left(px(6.0))
-                            .w(px(2.0))
-                            .bg(icon_color),
-                    ),
-            )
-    }
-
-    fn render_superchat_button(&self, is_live: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let icon_color = if is_live {
-            hsla(0.0, 0.0, 1.0, 0.7)
-        } else {
-            Colors::text_muted()
-        };
-
-        div()
-            .id("sc-window-btn")
-            .size(px(24.0))
-            .rounded(px(4.0))
-            .cursor_pointer()
-            .flex()
-            .items_center()
-            .justify_center()
-            .hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.2)))
-            .on_click(cx.listener(|this, _event, window, cx| {
-                this.open_superchat_window(window, cx);
-            }))
-            .child(
-                div()
-                    .size(px(14.0))
-                    .border_1()
-                    .border_color(icon_color)
-                    .rounded(px(3.0))
-                    .rounded_bl(px(0.0)),
-            )
-    }
-
-    fn render_stats_button(&self, is_live: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let icon_color = if is_live {
-            hsla(0.0, 0.0, 1.0, 0.7)
-        } else {
-            Colors::text_muted()
-        };
-
-        div()
-            .id("stats-window-btn")
-            .size(px(24.0))
-            .rounded(px(4.0))
-            .cursor_pointer()
-            .flex()
-            .items_center()
-            .justify_center()
-            .hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.2)))
-            .on_click(cx.listener(|this, _event, window, cx| {
-                this.open_statistics_window(window, cx);
-            }))
-            .child(
-                h_flex()
-                    .gap(px(1.0))
-                    .items_end()
-                    .h(px(12.0))
-                    .child(div().w(px(3.0)).h(px(6.0)).bg(icon_color))
-                    .child(div().w(px(3.0)).h(px(10.0)).bg(icon_color))
-                    .child(div().w(px(3.0)).h(px(8.0)).bg(icon_color)),
             )
     }
 
@@ -368,8 +257,6 @@ impl MainView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        use super::AVAILABLE_COMMANDS;
-
         let opacity = self.opacity;
         let command_tx = self.command_tx.clone();
         let room_id = self.room.as_ref().map(|r| r.real_id());
@@ -383,8 +270,7 @@ impl MainView {
             cx,
             |window, cx| {
                 let input = cx.new(|cx| {
-                    gpui_component::input::InputState::new(window, cx)
-                        .placeholder("发送弹幕或输入命令 (/title, /bye)...")
+                    gpui_component::input::InputState::new(window, cx).placeholder("发送弹幕…")
                 });
                 CommandInputWrapper { input }
             },
@@ -395,90 +281,22 @@ impl MainView {
         if self.input_state.as_ref() != Some(&input_state) {
             let command_tx_enter = self.command_tx.clone();
             let pending_clear = self.pending_input_clear.clone();
-            let show_popup = self.show_command_popup.clone();
-            let selected_idx = self.selected_command_index.clone();
-            let pending_cmd = self.pending_command_insert.clone();
             let subscription = cx.subscribe(
                 &input_state,
                 move |this, input, event: &gpui_component::input::InputEvent, cx| {
-                    match event {
-                        gpui_component::input::InputEvent::PressEnter { .. } => {
-                            // If popup is showing and user presses enter, select the command
-                            if show_popup.get() {
-                                let idx = selected_idx.get();
-                                if idx < AVAILABLE_COMMANDS.len() {
-                                    let (cmd, _) = AVAILABLE_COMMANDS[idx];
-                                    // Set the command text with a trailing space for /title
-                                    let new_text = if cmd == "/title" {
-                                        format!("{} ", cmd)
-                                    } else {
-                                        cmd.to_string()
-                                    };
-                                    *pending_cmd.borrow_mut() = Some(new_text);
-                                    show_popup.set(false);
-                                    selected_idx.set(0);
-                                    cx.notify();
-                                    return;
-                                }
-                            }
-
-                            let text = input.read(cx).text().to_string().trim().to_string();
-                            if text.is_empty() {
-                                return;
-                            }
-
-                            // Handle debug commands (debug builds only)
-                            #[cfg(debug_assertions)]
-                            if let Some(args) = text.strip_prefix("/debug ") {
-                                this.handle_debug_command(args);
-                                pending_clear.set(true);
-                                show_popup.set(false);
-                                selected_idx.set(0);
-                                cx.notify();
-                                return;
-                            }
-
-                            if let Some(room_id) = this.room.as_ref().map(|r| r.real_id()) {
-                                if let Some(title) = text.strip_prefix("/title ") {
-                                    let title = title.trim().to_string();
-                                    if !title.is_empty() {
-                                        let _ = command_tx_enter
-                                            .send(UiCommand::UpdateRoomTitle { room_id, title });
-                                    }
-                                } else if text == "/bye" {
-                                    let _ = command_tx_enter.send(UiCommand::StopLive { room_id });
-                                } else {
-                                    let _ = command_tx_enter.send(UiCommand::SendDanmu {
-                                        room_id,
-                                        message: text,
-                                    });
-                                }
-                            }
-
-                            pending_clear.set(true);
-                            show_popup.set(false);
-                            selected_idx.set(0);
-                            cx.notify();
+                    if let gpui_component::input::InputEvent::PressEnter { .. } = event {
+                        let text = input.read(cx).text().to_string().trim().to_string();
+                        if text.is_empty() {
+                            return;
                         }
-                        gpui_component::input::InputEvent::Change => {
-                            let text = input.read(cx).text().to_string();
-                            // Show popup when text starts with "/" but is not a complete command with args
-                            let should_show = text.starts_with('/')
-                                && !text.contains(' ')
-                                && text.len() < 10;
-                            show_popup.set(should_show);
-                            if !should_show {
-                                selected_idx.set(0);
-                            }
-                            cx.notify();
+                        if let Some(room_id) = this.room.as_ref().map(|r| r.real_id()) {
+                            let _ = command_tx_enter.send(UiCommand::SendDanmu {
+                                room_id,
+                                message: text,
+                            });
                         }
-                        gpui_component::input::InputEvent::Blur => {
-                            // Hide popup when input loses focus
-                            show_popup.set(false);
-                            selected_idx.set(0);
-                            cx.notify();
-                        }
-                        _ => {}
+                        pending_clear.set(true);
+                        cx.notify();
                     }
                 },
             );
@@ -487,48 +305,14 @@ impl MainView {
             self._input_subscription = Some(subscription);
         }
 
-        // Handle pending input clear
         if self.pending_input_clear.get() {
             input_state.update(cx, |state, cx| {
                 state.set_value("", window, cx);
             });
             self.pending_input_clear.set(false);
-            self.show_command_popup.set(false);
-            self.selected_command_index.set(0);
-        }
-
-        // Handle pending command insert
-        if let Some(cmd) = self.pending_command_insert.borrow_mut().take() {
-            input_state.update(cx, |state, cx| {
-                state.set_value(&cmd, window, cx);
-            });
         }
 
         let input_state_for_click = input_state.clone();
-        let show_popup = self.show_command_popup.get();
-        let selected_idx = self.selected_command_index.get();
-
-        // Get current input text to filter commands
-        let current_text = input_state.read(cx).text().to_string();
-        let filtered_commands: Vec<(usize, &str, &str)> = AVAILABLE_COMMANDS
-            .iter()
-            .enumerate()
-            .filter(|(_, (cmd, _))| {
-                current_text.is_empty() || cmd.starts_with(&current_text)
-            })
-            .map(|(i, (cmd, desc))| (i, *cmd, *desc))
-            .collect();
-
-        // Clone state for popup click handlers
-        let input_state_for_popup = input_state.clone();
-        let show_popup_state = self.show_command_popup.clone();
-        let selected_idx_state = self.selected_command_index.clone();
-
-        // Clone state for key handler
-        let show_popup_for_key = self.show_command_popup.clone();
-        let selected_idx_for_key = self.selected_command_index.clone();
-        let pending_cmd_for_key = self.pending_command_insert.clone();
-        let filtered_count = filtered_commands.len();
 
         v_flex()
             .w_full()
@@ -562,193 +346,132 @@ impl MainView {
                         }),
                     )),
             )
-            .when(!self.lite_mode, |el| el.child(
-                div()
-                    .relative()
-                    .w_full()
-                    .on_key_down(move |event, _window, cx| {
-                        if !show_popup_for_key.get() || filtered_count == 0 {
-                            return;
-                        }
+            .when(!self.lite_mode, |el| {
+                el.child(
+                    h_flex()
+                        .w_full()
+                        .h(px(40.0))
+                        .px_3()
+                        .py_2()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            div()
+                                .flex_1()
+                                .child(gpui_component::input::Input::new(&input_state).cleanable(true)),
+                        )
+                        .child(
+                            div()
+                                .id("send-btn")
+                                .px_3()
+                                .py(px(6.0))
+                                .rounded(px(4.0))
+                                .cursor_pointer()
+                                .bg(Colors::accent())
+                                .hover(|s| s.opacity(0.8))
+                                .text_size(px(12.0))
+                                .text_color(Colors::button_text())
+                                .child("发送")
+                                .on_click(move |_event, window, cx| {
+                                    let text = input_state_for_click
+                                        .read(cx)
+                                        .text()
+                                        .to_string()
+                                        .trim()
+                                        .to_string();
+                                    if text.is_empty() {
+                                        return;
+                                    }
+                                    if let Some(room_id) = room_id {
+                                        let _ = command_tx.send(UiCommand::SendDanmu {
+                                            room_id,
+                                            message: text,
+                                        });
+                                    }
+                                    input_state_for_click.update(cx, |state, cx| {
+                                        state.set_value("", window, cx);
+                                    });
+                                }),
+                        ),
+                )
+            })
+    }
 
-                        match event.keystroke.key.as_str() {
-                            "up" => {
-                                let current = selected_idx_for_key.get();
-                                if current == 0 {
-                                    selected_idx_for_key.set(filtered_count - 1);
-                                } else {
-                                    selected_idx_for_key.set(current - 1);
-                                }
-                                cx.stop_propagation();
-                                cx.refresh_windows();
-                            }
-                            "down" => {
-                                let current = selected_idx_for_key.get();
-                                selected_idx_for_key.set((current + 1) % filtered_count);
-                                cx.stop_propagation();
-                                cx.refresh_windows();
-                            }
-                            "escape" => {
-                                show_popup_for_key.set(false);
-                                selected_idx_for_key.set(0);
-                                cx.stop_propagation();
-                                cx.refresh_windows();
-                            }
-                            "tab" => {
-                                // Tab also selects the current command
-                                let idx = selected_idx_for_key.get();
-                                if idx < AVAILABLE_COMMANDS.len() {
-                                    let (cmd, _) = AVAILABLE_COMMANDS[idx];
-                                    let new_text = if cmd == "/title" {
-                                        format!("{} ", cmd)
-                                    } else {
-                                        cmd.to_string()
-                                    };
-                                    *pending_cmd_for_key.borrow_mut() = Some(new_text);
-                                    show_popup_for_key.set(false);
-                                    selected_idx_for_key.set(0);
-                                    cx.stop_propagation();
-                                    cx.refresh_windows();
-                                }
-                            }
-                            _ => {}
-                        }
-                    })
+    /// Render the floating SuperChat overlay above the danmu list area.
+    /// Each card is clickable: tap to dismiss immediately.
+    pub(super) fn render_floating_sc(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        if self.floating_sc.is_empty() {
+            return None;
+        }
+        let opacity = self.opacity;
+        let font_size = self.font_size;
+
+        let mut stack = v_flex()
+            .id("floating-sc-stack")
+            .absolute()
+            .top(px(36.0))
+            .left(px(8.0))
+            .right(px(22.0))
+            .gap_1()
+            .max_h(px(220.0))
+            .overflow_hidden();
+
+        // Newest SC on top; show up to 5
+        for sc in self.floating_sc.iter().rev().take(5) {
+            let bg = parse_sc_hex(&sc.background_bottom_color, opacity);
+            let header_bg = parse_sc_hex(&sc.background_color, opacity);
+            let sc_id = sc.id.clone();
+            stack = stack.child(
+                v_flex()
+                    .id(SharedString::from(format!("sc-card-{}", sc.id)))
+                    .rounded(px(6.0))
+                    .overflow_hidden()
+                    .border_1()
+                    .border_color(Colors::border())
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        let id = sc_id.clone();
+                        this.floating_sc.retain(|x| x.id != id);
+                        cx.notify();
+                    }))
                     .child(
                         h_flex()
-                            .w_full()
-                            .h(px(40.0))
-                            .px_3()
-                            .py_2()
+                            .px_2()
+                            .py(px(4.0))
                             .gap_2()
                             .items_center()
+                            .bg(header_bg)
+                            .text_color(Colors::text_primary())
                             .child(
                                 div()
-                                    .flex_1()
-                                    .child(gpui_component::input::Input::new(&input_state).cleanable(true)),
+                                    .text_size(px(font_size))
+                                    .font_weight(FontWeight::BOLD)
+                                    .child(format!("¥{}", sc.price)),
                             )
                             .child(
                                 div()
-                                    .id("send-btn")
-                                    .px_3()
-                                    .py(px(6.0))
-                                    .rounded(px(4.0))
-                                    .cursor_pointer()
-                                    .bg(Colors::accent())
-                                    .hover(|s| s.opacity(0.8))
-                                    .text_size(px(12.0))
-                                    .text_color(Colors::button_text())
-                                    .child("发送")
-                                    .on_click({
-                                        move |_event, window, cx| {
-                                            let text = input_state_for_click
-                                                .read(cx)
-                                                .text()
-                                                .to_string()
-                                                .trim()
-                                                .to_string();
-                                            if text.is_empty() {
-                                                return;
-                                            }
-
-                                            if let Some(room_id) = room_id {
-                                                if let Some(title) = text.strip_prefix("/title ") {
-                                                    let title = title.trim().to_string();
-                                                    if !title.is_empty() {
-                                                        let _ =
-                                                            command_tx.send(UiCommand::UpdateRoomTitle {
-                                                                room_id,
-                                                                title,
-                                                            });
-                                                    }
-                                                } else if text == "/bye" {
-                                                    let _ =
-                                                        command_tx.send(UiCommand::StopLive { room_id });
-                                                } else {
-                                                    let _ = command_tx.send(UiCommand::SendDanmu {
-                                                        room_id,
-                                                        message: text,
-                                                    });
-                                                }
-                                            }
-
-                                            input_state_for_click.update(cx, |state, cx| {
-                                                state.set_value("", window, cx);
-                                            });
-                                        }
-                                    }),
+                                    .text_size(px(font_size))
+                                    .overflow_hidden()
+                                    .child(display_name(
+                                        &sc.sender.uname,
+                                        sc.sender.uid,
+                                        &self.nicknames,
+                                    )),
                             ),
                     )
-                    // Command autocomplete popup
-                    .when(show_popup && !filtered_commands.is_empty(), |this| {
-                        this.child(
-                            div()
-                                .absolute()
-                                .bottom(px(44.0))
-                                .left(px(12.0))
-                                .right(px(12.0))
-                                .bg(Colors::bg_secondary_with_opacity(opacity))
-                                .border_1()
-                                .border_color(Colors::border())
-                                .rounded(px(6.0))
-                                .shadow_lg()
-                                .overflow_hidden()
-                                .child(
-                                    v_flex()
-                                        .w_full()
-                                        .py_1()
-                                        .children(filtered_commands.iter().enumerate().map(|(display_idx, (_, cmd, desc))| {
-                                            let is_selected = display_idx == selected_idx;
-                                            let cmd_str = cmd.to_string();
-                                            let show_popup_for_item = show_popup_state.clone();
-                                            let selected_idx_for_item = selected_idx_state.clone();
-                                            let input_for_focus = input_state_for_popup.clone();
+                    .child(
+                        div()
+                            .px_2()
+                            .py(px(6.0))
+                            .text_size(px(font_size))
+                            .text_color(hsla(0.0, 0.0, 1.0, 1.0))
+                            .bg(bg)
+                            .child(sc.message.clone()),
+                    ),
+            );
+        }
 
-                                            div()
-                                                .id(SharedString::from(format!("cmd-{}", display_idx)))
-                                                .w_full()
-                                                .px_3()
-                                                .py_2()
-                                                .cursor_pointer()
-                                                .when(is_selected, |s| s.bg(Colors::bg_hover_with_opacity(opacity)))
-                                                .hover(|s| s.bg(Colors::bg_hover_with_opacity(opacity)))
-                                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                                    let new_text = if cmd_str == "/title" {
-                                                        format!("{} ", cmd_str)
-                                                    } else {
-                                                        cmd_str.clone()
-                                                    };
-                                                    // Set the value directly since we have window access
-                                                    input_for_focus.update(cx, |state, cx| {
-                                                        state.set_value(&new_text, window, cx);
-                                                    });
-                                                    show_popup_for_item.set(false);
-                                                    selected_idx_for_item.set(0);
-                                                    cx.refresh_windows();
-                                                })
-                                                .child(
-                                                    h_flex()
-                                                        .gap_3()
-                                                        .items_center()
-                                                        .child(
-                                                            div()
-                                                                .text_size(px(13.0))
-                                                                .font_weight(FontWeight::MEDIUM)
-                                                                .text_color(Colors::accent())
-                                                                .child(cmd.to_string()),
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .text_size(px(12.0))
-                                                                .text_color(Colors::text_muted())
-                                                                .child(desc.to_string()),
-                                                        ),
-                                                )
-                                        })),
-                                ),
-                        )
-                    }),
-            ))
+        Some(stack)
     }
 
     pub(super) fn render_danmu_list(
@@ -762,6 +485,7 @@ impl MainView {
         let opacity = self.opacity;
         let scroll_handle = self.scroll_handle.clone();
         let selected_user = self.selected_user.clone();
+        let nicknames = Rc::clone(&self.nicknames);
 
         let render_rows = Rc::clone(&self.render_rows);
         let item_count = render_rows.len();
@@ -786,6 +510,7 @@ impl MainView {
                                     medal_display,
                                     opacity,
                                     selected_user,
+                                    Rc::clone(&nicknames),
                                 ).render_element()
                             })
                             .collect()
@@ -816,12 +541,6 @@ impl Render for MainView {
                 .map(|t| t.lock().click_through_enabled())
                 .unwrap_or(false);
             self.click_through = click_through;
-            // Apply to all secondary windows
-            for handle in [self.gift_window, self.superchat_window].into_iter().flatten() {
-                let _ = cx.update_window(handle, |_, win, _cx| {
-                    crate::platform::set_window_click_through(win, click_through);
-                });
-            }
         }
 
         // Check if tray requested to open settings
@@ -878,6 +597,30 @@ impl Render for MainView {
         let selected_user = self.selected_user.borrow().clone();
         let selected_user_state = self.selected_user.clone();
 
+        // Ensure the per-uid nickname input state is in sync with the currently
+        // selected user before we render the popup. Creating an InputState
+        // requires `window`/`cx`, neither of which is available inside the
+        // `.when_some` closure further down, so do it here.
+        if let Some(sel) = selected_user.as_ref() {
+            let uid = sel.sender.uid;
+            let needs_new = self
+                .nickname_input
+                .as_ref()
+                .map(|(u, _)| *u != uid)
+                .unwrap_or(true);
+            if needs_new {
+                let current = self.nicknames.get(&uid).cloned().unwrap_or_default();
+                let entity = cx.new(|cx| {
+                    gpui_component::input::InputState::new(window, cx)
+                        .placeholder("输入昵称…")
+                        .default_value(current)
+                });
+                self.nickname_input = Some((uid, entity));
+            }
+        } else if self.nickname_input.is_some() {
+            self.nickname_input = None;
+        }
+
         let danmu_history: Vec<(String, i64)> = if let Some(ref selected) = selected_user {
             if let (Some(db), Some(room)) = (&self.database, &self.room) {
                 let uid = selected.sender.uid;
@@ -892,17 +635,39 @@ impl Render for MainView {
 
         let show_update_dialog = self.show_update_dialog;
         let update_info = self.update_info.clone();
+        let show_face_auth_dialog = self.show_face_auth_dialog;
+        let face_auth_qr_view = self.face_auth_qr_view.clone();
+
+        let floating_sc = self.render_floating_sc(cx);
 
         v_flex()
             .size_full()
+            .relative()
             .bg(Colors::bg_primary_with_opacity(opacity))
             .text_color(Colors::text_primary())
             .child(self.render_header(window, cx))
             .child(self.render_danmu_list(window, cx))
             .child(self.render_footer(window, cx))
+            .when_some(floating_sc, |this, sc| this.child(sc))
             .when_some(selected_user, |this, selected| {
                 let state_for_close = selected_user_state.clone();
                 let history = danmu_history.clone();
+                let uid = selected.sender.uid;
+                let nickname_input = self
+                    .nickname_input
+                    .as_ref()
+                    .map(|(_, e)| e.clone())
+                    .expect("nickname_input was synced above when selected_user is Some");
+                let current_nickname = self.nicknames.get(&uid).cloned();
+                let cmd_tx = self.command_tx.clone();
+                let on_save: super::user_info_card::NicknameSaveCallback =
+                    std::sync::Arc::new(move |payload, _window, cx| {
+                        let _ = cmd_tx.send(UiCommand::SetNickname {
+                            uid,
+                            nickname: payload,
+                        });
+                        cx.refresh_windows();
+                    });
                 this.child(
                     div()
                         .id("user-info-overlay")
@@ -918,7 +683,13 @@ impl Render for MainView {
                                 .relative()
                                 .w_full()
                                 .max_w(px(300.0))
-                                .child(UserInfoCard::render_element(&selected, history))
+                                .child(UserInfoCard::render_element(
+                                    &selected,
+                                    history,
+                                    current_nickname.as_deref(),
+                                    nickname_input,
+                                    on_save,
+                                ))
                                 .child(
                                     div()
                                         .id("close-card-btn")
@@ -1022,6 +793,77 @@ impl Render for MainView {
                                                 }))
                                                 .child("前往下载")
                                         }),
+                                ),
+                        ),
+                )
+            })
+            // Face auth dialog (Bilibili face authentication QR code overlay)
+            .when(show_face_auth_dialog, |this| {
+                this.child(
+                    div()
+                        .id("face-auth-dialog-overlay")
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(hsla(0.0, 0.0, 0.0, 0.5 * opacity))
+                        .child(
+                            v_flex()
+                                .w(px(320.0))
+                                .p_4()
+                                .rounded(px(8.0))
+                                .bg(Colors::bg_secondary())
+                                .border_1()
+                                .border_color(Colors::border())
+                                .gap_3()
+                                .child(
+                                    h_flex()
+                                        .w_full()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(
+                                            div()
+                                                .text_size(px(16.0))
+                                                .font_weight(FontWeight::BOLD)
+                                                .child("人脸认证"),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("close-face-auth-btn")
+                                                .px_2()
+                                                .py(px(2.0))
+                                                .rounded(px(4.0))
+                                                .cursor_pointer()
+                                                .text_size(px(14.0))
+                                                .text_color(Colors::text_secondary())
+                                                .hover(|s| s.bg(Colors::bg_hover_with_opacity(opacity)))
+                                                .child("×")
+                                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                                    this.show_face_auth_dialog = false;
+                                                    cx.notify();
+                                                })),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(13.0))
+                                        .text_color(Colors::text_secondary())
+                                        .child("请使用哔哩哔哩 App 扫描二维码完成人脸认证"),
+                                )
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .flex()
+                                        .justify_center()
+                                        .child(face_auth_qr_view),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(12.0))
+                                        .text_color(Colors::text_muted())
+                                        .text_align(gpui::TextAlign::Center)
+                                        .child("认证完成后请重新点击开播"),
                                 ),
                         ),
                 )

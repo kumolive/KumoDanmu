@@ -14,24 +14,23 @@ mod render;
 mod user_info_card;
 
 pub use content_rendering::{render_content_with_links, DisplayMessage, RenderRow};
-use content_rendering::{estimate_danmu_prefix_width, estimate_text_width, split_content_to_lines};
+use content_rendering::{display_name, estimate_danmu_prefix_width, estimate_text_width, split_content_to_lines};
 use danmu_list_item::DanmuListItemView;
 use user_info_card::{SelectedUserState, UserInfoCard};
 
 use crate::app::UiCommand;
+use crate::components::QrCodeView;
 use crate::tray::{TrayManager, TrayState};
 use crate::views::AudienceView;
-use crate::views::GiftView;
 use crate::views::SettingView;
-use crate::views::StatisticsView;
-use crate::views::SuperChatView;
 use gpui::*;
 use jlivertool_core::database::Database;
 use jlivertool_core::events::Event;
+use jlivertool_core::messages::SuperChatMessage;
 use jlivertool_core::types::RoomId;
 use std::cell::Cell;
 use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -39,14 +38,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 const MAX_DANMU_COUNT: usize = 200;
-
-/// Available commands for the command autocomplete
-pub const AVAILABLE_COMMANDS: &[(&str, &str)] = &[
-    ("/title", "修改直播间标题"),
-    ("/bye", "关闭直播"),
-    #[cfg(debug_assertions)]
-    ("/debug", "调试: sc/gift/guard/danmu"),
-];
 
 /// Main window view state
 pub struct MainView {
@@ -63,6 +54,11 @@ pub struct MainView {
     online_count: u64,
     connected: bool,
     danmu_list: VecDeque<DisplayMessage>,
+    /// User nicknames (uid → custom name) — wrapped in Rc so it can be cheaply
+    /// cloned into each `DanmuListItemView` per frame.
+    pub(super) nicknames: Rc<HashMap<u64, String>>,
+    /// SuperChats floating on top of the danmu list (pruned when end_time elapses)
+    pub(super) floating_sc: Vec<SuperChatMessage>,
     /// Flattened render rows for the uniform_list (1 source message → 1-2 rows)
     render_rows: Rc<Vec<RenderRow>>,
     /// Last window width used to compute render_rows (for change detection)
@@ -73,12 +69,6 @@ pub struct MainView {
     pending_scroll_to_bottom: bool,
     // Settings view entity
     setting_view: Entity<SettingView>,
-    // Gift view entity
-    gift_view: Entity<GiftView>,
-    // SuperChat view entity
-    superchat_view: Entity<SuperChatView>,
-    // Statistics view entity
-    statistics_view: Entity<StatisticsView>,
     // Audience view entity
     audience_view: Entity<AudienceView>,
     // Database reference for statistics
@@ -107,9 +97,6 @@ pub struct MainView {
     scroll_handle: UniformListScrollHandle,
     // Window handles for single-instance windows
     settings_window: Option<AnyWindowHandle>,
-    gift_window: Option<AnyWindowHandle>,
-    superchat_window: Option<AnyWindowHandle>,
-    statistics_window: Option<AnyWindowHandle>,
     audience_window: Option<AnyWindowHandle>,
     // Input state for danmu input (lazily initialized)
     input_state: Option<Entity<gpui_component::input::InputState>>,
@@ -119,16 +106,17 @@ pub struct MainView {
     pending_input_clear: Rc<Cell<bool>>,
     // Selected user for info card popup
     selected_user: SelectedUserState,
+    /// Per-uid nickname input state for the user info card popup. Recreated
+    /// lazily whenever the displayed uid changes.
+    nickname_input: Option<(u64, Entity<gpui_component::input::InputState>)>,
     // Last saved window bounds (to avoid saving on every frame)
     last_saved_bounds: Option<(i32, i32, u32, u32)>,
-    // Command autocomplete state
-    show_command_popup: Rc<Cell<bool>>,
-    selected_command_index: Rc<Cell<usize>>,
-    // Pending command to insert (set by subscription, applied in render)
-    pending_command_insert: Rc<RefCell<Option<String>>>,
     // Update dialog state
     show_update_dialog: bool,
     update_info: Option<UpdateDialogInfo>,
+    // Face auth dialog state (Bilibili sometimes requires face auth before starting live)
+    show_face_auth_dialog: bool,
+    face_auth_qr_view: Entity<QrCodeView>,
     // Tray manager for system tray integration
     tray_manager: Option<Arc<parking_lot::Mutex<TrayManager>>>,
     // Login status for tray
@@ -154,10 +142,8 @@ impl MainView {
         cx: &mut Context<Self>,
     ) -> Self {
         let setting_view = cx.new(SettingView::new);
-        let gift_view = cx.new(GiftView::new);
-        let superchat_view = cx.new(SuperChatView::new);
-        let statistics_view = cx.new(StatisticsView::new);
         let audience_view = cx.new(AudienceView::new);
+        let face_auth_qr_view = cx.new(QrCodeView::new);
 
         // Setup callbacks for setting view
         let tx_login = command_tx.clone();
@@ -167,9 +153,6 @@ impl MainView {
 
         // Get entity for opacity callback
         let entity = cx.entity().downgrade();
-        let entity_gift = entity.clone();
-        let entity_sc = entity.clone();
-        let entity_stats = entity.clone();
 
         setting_view.update(cx, |view, _cx| {
             view.on_qr_login(move |_window, _cx| {
@@ -191,52 +174,10 @@ impl MainView {
                     let _ = tx_opacity.send(UiCommand::UpdateOpacity(opacity));
                     let _ = entity.update(cx, |view, cx| {
                         view.opacity = opacity;
-                        // Update opacity for all secondary views
-                        view.gift_view
-                            .update(cx, |v, cx| v.set_opacity(opacity, cx));
-                        view.superchat_view
-                            .update(cx, |v, cx| v.set_opacity(opacity, cx));
-                        view.statistics_view
-                            .update(cx, |v, cx| v.set_opacity(opacity, cx));
                         view.audience_view
                             .update(cx, |v, cx| v.set_opacity(opacity, cx));
                         cx.notify();
                     });
-                }
-            });
-
-            view.on_open_gift_window(move |window, cx| {
-                let _ = entity_gift.update(cx, |view, cx| {
-                    view.open_gift_window(window, cx);
-                });
-            });
-
-            view.on_open_superchat_window(move |window, cx| {
-                let _ = entity_sc.update(cx, |view, cx| {
-                    view.open_superchat_window(window, cx);
-                });
-            });
-
-            view.on_open_statistics_window(move |window, cx| {
-                let _ = entity_stats.update(cx, |view, cx| {
-                    view.open_statistics_window(window, cx);
-                });
-            });
-
-            view.on_start_live({
-                let tx = command_tx.clone();
-                move |room_id, area_id, _window, _cx| {
-                    let _ = tx.send(UiCommand::StartLive {
-                        room_id,
-                        area_v2: area_id,
-                    });
-                }
-            });
-
-            view.on_stop_live({
-                let tx = command_tx.clone();
-                move |room_id, _window, _cx| {
-                    let _ = tx.send(UiCommand::StopLive { room_id });
                 }
             });
 
@@ -324,31 +265,6 @@ impl MainView {
                 }
             });
 
-            view.on_tts_enabled_change({
-                let tx = command_tx.clone();
-                move |danmu, gift, superchat, _window, _cx| {
-                    let _ = tx.send(UiCommand::UpdateTtsEnabled {
-                        danmu,
-                        gift,
-                        superchat,
-                    });
-                }
-            });
-
-            view.on_tts_volume_change({
-                let tx = command_tx.clone();
-                move |volume, _window, _cx| {
-                    let _ = tx.send(UiCommand::UpdateTtsVolume(volume));
-                }
-            });
-
-            view.on_tts_test({
-                let tx = command_tx.clone();
-                move |_window, _cx| {
-                    let _ = tx.send(UiCommand::TestTts);
-                }
-            });
-
             view.on_advanced_settings_change({
                 let tx = command_tx.clone();
                 move |max_danmu, log_level, _window, _cx| {
@@ -370,13 +286,6 @@ impl MainView {
                 }
             });
 
-            view.on_room_title_change({
-                let tx = command_tx.clone();
-                move |room_id, title, _window, _cx| {
-                    let _ = tx.send(UiCommand::UpdateRoomTitle { room_id, title });
-                }
-            });
-
             view.on_check_update({
                 let tx = command_tx.clone();
                 move |_window, _cx| {
@@ -388,6 +297,13 @@ impl MainView {
                 let tx = command_tx.clone();
                 move |enabled, _window, _cx| {
                     let _ = tx.send(UiCommand::UpdateAutoUpdateCheck(enabled));
+                }
+            });
+
+            view.on_set_nickname({
+                let tx = command_tx.clone();
+                move |uid, nickname, _window, _cx| {
+                    let _ = tx.send(UiCommand::SetNickname { uid, nickname });
                 }
             });
         });
@@ -403,21 +319,20 @@ impl MainView {
             online_count: 0,
             connected: false,
             danmu_list: VecDeque::with_capacity(MAX_DANMU_COUNT),
+            nicknames: Rc::new(HashMap::new()),
+            floating_sc: Vec::new(),
             render_rows: Rc::new(Vec::new()),
             last_render_width: 0.0,
             render_rows_source_count: 0,
             pending_scroll_to_bottom: true,
             setting_view,
-            gift_view,
-            superchat_view,
-            statistics_view,
             audience_view,
             database: None,
             config: None,
             opacity: 1.0,
             font_size: 14.0,
             lite_mode: false,
-            medal_display: true,
+            medal_display: false,
             interact_display: false,
             guard_effect: true,
             level_effect: false,
@@ -427,20 +342,17 @@ impl MainView {
             pending_click_through: Arc::new(AtomicBool::new(false)),
             scroll_handle: UniformListScrollHandle::new(),
             settings_window: None,
-            gift_window: None,
-            superchat_window: None,
-            statistics_window: None,
             audience_window: None,
             input_state: None,
             _input_subscription: None,
             pending_input_clear: Rc::new(Cell::new(false)),
             selected_user: Rc::new(RefCell::new(None)),
+            nickname_input: None,
             last_saved_bounds: None,
-            show_command_popup: Rc::new(Cell::new(false)),
-            selected_command_index: Rc::new(Cell::new(0)),
-            pending_command_insert: Rc::new(RefCell::new(None)),
             show_update_dialog: false,
             update_info: None,
+            show_face_auth_dialog: false,
+            face_auth_qr_view,
             tray_manager: None,
             logged_in: false,
             logged_in_uid: None,
@@ -564,113 +476,6 @@ impl MainView {
         }
     }
 
-    /// Handle debug commands (only available in debug builds)
-    #[cfg(debug_assertions)]
-    pub(super) fn handle_debug_command(&mut self, args: &str) {
-        use jlivertool_core::messages::{GiftInfo, GiftMessage, GuardMessage, SuperChatMessage};
-        use jlivertool_core::types::{MedalInfo, Sender};
-
-        let now = chrono::Utc::now().timestamp();
-        let debug_id = format!("debug-{}", now);
-        let fake_sender = Sender {
-            uid: 12345678,
-            uname: "测试用户".to_string(),
-            face: String::new(),
-            medal_info: MedalInfo {
-                anchor_roomid: 0,
-                anchor_uname: String::new(),
-                guard_level: 0,
-                medal_color: 0x6154c1,
-                medal_color_border: 0x6154c1,
-                medal_color_start: 0x6154c1,
-                medal_color_end: 0x6154c1,
-                medal_level: 20,
-                medal_name: "测试".to_string(),
-                is_lighted: true,
-            },
-        };
-
-        let parts: Vec<&str> = args.splitn(2, ' ').collect();
-        let sub_cmd = parts.first().copied().unwrap_or("");
-        let content = parts.get(1).copied().unwrap_or("测试内容");
-
-        match sub_cmd {
-            "sc" => {
-                let sc = SuperChatMessage {
-                    id: debug_id.clone(),
-                    room: 0,
-                    sender: fake_sender,
-                    message: content.to_string(),
-                    price: 30,
-                    timestamp: now,
-                    start_time: now,
-                    end_time: now + 60,
-                    background_color: "#EDF5FF".to_string(),
-                    background_bottom_color: "#2A60B2".to_string(),
-                    archived: false,
-                };
-                self.danmu_list.push_back(DisplayMessage::SuperChat(sc));
-            }
-            "gift" => {
-                let gift = GiftMessage {
-                    id: debug_id.clone(),
-                    room: 0,
-                    gift_info: GiftInfo {
-                        id: 1,
-                        name: content.to_string(),
-                        price: 1000,
-                        coin_type: "gold".to_string(),
-                        img_basic: String::new(),
-                        img_dynamic: String::new(),
-                        gif: String::new(),
-                        webp: String::new(),
-                    },
-                    sender: fake_sender,
-                    action: "投喂".to_string(),
-                    num: 1,
-                    timestamp: now,
-                    archived: false,
-                };
-                self.danmu_list.push_back(DisplayMessage::Gift(gift));
-            }
-            "guard" => {
-                let guard = GuardMessage {
-                    id: debug_id.clone(),
-                    room: 0,
-                    sender: fake_sender,
-                    num: 1,
-                    unit: "月".to_string(),
-                    guard_level: 3,
-                    price: 198000,
-                    timestamp: now,
-                    archived: false,
-                };
-                self.danmu_list.push_back(DisplayMessage::Guard(guard));
-            }
-            "danmu" | _ => {
-                let danmu = jlivertool_core::messages::DanmuMessage {
-                    sender: fake_sender,
-                    content: content.to_string(),
-                    is_generated: false,
-                    is_special: false,
-                    is_mirror: false,
-                    emoji_content: None,
-                    side_index: -1,
-                    reply_uname: None,
-                };
-                self.danmu_list.push_back(DisplayMessage::Danmu(danmu));
-            }
-        }
-
-        while self.danmu_list.len() > MAX_DANMU_COUNT {
-            self.danmu_list.pop_front();
-        }
-        // Reset render rows so they get rebuilt on next render
-        self.render_rows_source_count = 0;
-        self.render_rows = Rc::new(Vec::new());
-        self.scroll_to_bottom();
-    }
-
     /// Update render rows: full rebuild if width changed, incremental append otherwise.
     pub(super) fn update_render_rows(&mut self, window_width: f32) {
         if (window_width - self.last_render_width).abs() > 1.0 || self.last_render_width == 0.0 {
@@ -692,6 +497,7 @@ impl MainView {
                 self.font_size,
                 self.lite_mode,
                 self.medal_display,
+                &self.nicknames,
             );
         }
         self.render_rows = Rc::new(rows);
@@ -728,6 +534,7 @@ impl MainView {
                 self.font_size,
                 self.lite_mode,
                 self.medal_display,
+                &self.nicknames,
             );
         }
 
@@ -743,6 +550,7 @@ impl MainView {
         font_size: f32,
         lite_mode: bool,
         medal_display: bool,
+        nicknames: &HashMap<u64, String>,
     ) {
         match msg {
             DisplayMessage::Danmu(danmu) => {
@@ -752,8 +560,9 @@ impl MainView {
                     return;
                 }
 
+                let label = display_name(&danmu.sender.uname, danmu.sender.uid, nicknames);
                 let prefix_width =
-                    estimate_danmu_prefix_width(danmu, font_size, lite_mode, medal_display);
+                    estimate_danmu_prefix_width(danmu, &label, font_size, lite_mode, medal_display);
                 let first_line_content_width = available_width - prefix_width;
                 // Continuation line has only padding, no prefix
                 let padding = if lite_mode { 4.0 * 2.0 } else { 8.0 * 2.0 };
@@ -782,42 +591,6 @@ impl MainView {
                                 danmu: danmu.clone(),
                                 content_slice: line.clone(),
                                 continuation_index: i,
-                            });
-                        }
-                    }
-                }
-            }
-            DisplayMessage::SuperChat(sc) => {
-                // Always split superchat: header (avatar + price + username) + content rows
-                rows.push(RenderRow::SuperChatHeader { sc: sc.clone() });
-
-                if !sc.message.is_empty() {
-                    let padding = if lite_mode { 4.0 * 2.0 } else { 8.0 * 2.0 };
-                    // Account for border_l_4 (4px)
-                    let content_line_width = available_width - padding - 4.0;
-                    let content_width = estimate_text_width(&sc.message, font_size * 0.9);
-
-                    if content_width <= content_line_width || content_line_width <= 0.0 {
-                        rows.push(RenderRow::SuperChatContent {
-                            sc: sc.clone(),
-                            content_slice: sc.message.clone(),
-                            continuation_index: 0,
-                            is_last: true,
-                        });
-                    } else {
-                        let lines = split_content_to_lines(
-                            &sc.message,
-                            font_size * 0.9,
-                            content_line_width,
-                            content_line_width,
-                        );
-                        let last_idx = lines.len().saturating_sub(1);
-                        for (i, line) in lines.iter().enumerate() {
-                            rows.push(RenderRow::SuperChatContent {
-                                sc: sc.clone(),
-                                content_slice: line.clone(),
-                                continuation_index: i,
-                                is_last: i == last_idx,
                             });
                         }
                     }
@@ -958,206 +731,6 @@ impl MainView {
         }
     }
 
-    /// Open gift window
-    fn open_gift_window(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        use crate::views::WindowBoundsTracker;
-        use gpui_component::Root;
-        use jlivertool_core::types::WindowType;
-
-        if let Some(handle) = &self.gift_window {
-            if cx
-                .update_window(*handle, |_, window, _cx| {
-                    window.activate_window();
-                })
-                .is_ok()
-            {
-                return;
-            }
-            self.gift_window = None;
-        }
-
-        let bounds = if let Some(ref config) = self.config {
-            let saved = config.read().get_window_config(WindowType::Gift);
-            if saved.width > 0 && saved.height > 0 {
-                Bounds::new(
-                    point(px(saved.x as f32), px(saved.y as f32)),
-                    size(px(saved.width as f32), px(saved.height as f32)),
-                )
-            } else {
-                Bounds::centered(None, size(px(500.0), px(600.0)), cx)
-            }
-        } else {
-            Bounds::centered(None, size(px(500.0), px(600.0)), cx)
-        };
-
-        let gift_view = self.gift_view.clone();
-        let always_on_top = self.always_on_top;
-        let click_through = self.click_through;
-        let command_tx = self.command_tx.clone();
-
-        if let Ok(handle) = cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("礼物记录".into()),
-                    appears_transparent: true,
-                    ..Default::default()
-                }),
-                window_background: WindowBackgroundAppearance::Transparent,
-                window_min_size: Some(size(px(400.0), px(300.0))),
-                ..Default::default()
-            },
-            |new_window, cx| {
-                if always_on_top {
-                    crate::platform::set_window_always_on_top(new_window, true);
-                }
-                if click_through {
-                    crate::platform::set_window_click_through(new_window, true);
-                }
-                let tracker =
-                    cx.new(|_| WindowBoundsTracker::new(gift_view, WindowType::Gift, command_tx));
-                cx.new(|cx| Root::new(tracker, new_window, cx))
-            },
-        ) {
-            self.gift_window = Some(handle.into());
-        }
-    }
-
-    /// Open superchat window
-    fn open_superchat_window(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        use crate::views::WindowBoundsTracker;
-        use gpui_component::Root;
-        use jlivertool_core::types::WindowType;
-
-        if let Some(handle) = &self.superchat_window {
-            if cx
-                .update_window(*handle, |_, window, _cx| {
-                    window.activate_window();
-                })
-                .is_ok()
-            {
-                return;
-            }
-            self.superchat_window = None;
-        }
-
-        let bounds = if let Some(ref config) = self.config {
-            let saved = config.read().get_window_config(WindowType::SuperChat);
-            if saved.width > 0 && saved.height > 0 {
-                Bounds::new(
-                    point(px(saved.x as f32), px(saved.y as f32)),
-                    size(px(saved.width as f32), px(saved.height as f32)),
-                )
-            } else {
-                Bounds::centered(None, size(px(500.0), px(600.0)), cx)
-            }
-        } else {
-            Bounds::centered(None, size(px(500.0), px(600.0)), cx)
-        };
-
-        let superchat_view = self.superchat_view.clone();
-        let always_on_top = self.always_on_top;
-        let click_through = self.click_through;
-        let command_tx = self.command_tx.clone();
-
-        if let Ok(handle) = cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("醒目留言".into()),
-                    appears_transparent: true,
-                    ..Default::default()
-                }),
-                window_background: WindowBackgroundAppearance::Transparent,
-                window_min_size: Some(size(px(400.0), px(300.0))),
-                ..Default::default()
-            },
-            |new_window, cx| {
-                if always_on_top {
-                    crate::platform::set_window_always_on_top(new_window, true);
-                }
-                if click_through {
-                    crate::platform::set_window_click_through(new_window, true);
-                }
-                let tracker = cx.new(|_| {
-                    WindowBoundsTracker::new(superchat_view, WindowType::SuperChat, command_tx)
-                });
-                cx.new(|cx| Root::new(tracker, new_window, cx))
-            },
-        ) {
-            self.superchat_window = Some(handle.into());
-        }
-    }
-
-    /// Open statistics window
-    fn open_statistics_window(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        use crate::views::WindowBoundsTracker;
-        use gpui_component::Root;
-        use jlivertool_core::types::WindowType;
-
-        if let Some(handle) = &self.statistics_window {
-            if cx
-                .update_window(*handle, |_, window, _cx| {
-                    window.activate_window();
-                })
-                .is_ok()
-            {
-                return;
-            }
-            self.statistics_window = None;
-        }
-
-        let bounds = if let Some(ref config) = self.config {
-            let saved = config.read().get_window_config(WindowType::Detail);
-            if saved.width > 0 && saved.height > 0 {
-                Bounds::new(
-                    point(px(saved.x as f32), px(saved.y as f32)),
-                    size(px(saved.width as f32), px(saved.height as f32)),
-                )
-            } else {
-                Bounds::centered(None, size(px(420.0), px(600.0)), cx)
-            }
-        } else {
-            Bounds::centered(None, size(px(420.0), px(600.0)), cx)
-        };
-
-        let statistics_view = self.statistics_view.clone();
-        let always_on_top = self.always_on_top;
-        let command_tx = self.command_tx.clone();
-
-        if let Some(db) = &self.database {
-            self.statistics_view.update(cx, |view, cx| {
-                view.set_database(db.clone());
-                view.set_room_id(self.room.as_ref().map(|r| r.real_id()), cx);
-            });
-        }
-
-        if let Ok(handle) = cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("数据统计".into()),
-                    appears_transparent: true,
-                    ..Default::default()
-                }),
-                window_background: WindowBackgroundAppearance::Transparent,
-                window_min_size: Some(size(px(350.0), px(300.0))),
-                ..Default::default()
-            },
-            |new_window, cx| {
-                if always_on_top {
-                    crate::platform::set_window_always_on_top(new_window, true);
-                }
-                let tracker = cx.new(|_| {
-                    WindowBoundsTracker::new(statistics_view, WindowType::Detail, command_tx)
-                });
-                cx.new(|cx| Root::new(tracker, new_window, cx))
-            },
-        ) {
-            self.statistics_window = Some(handle.into());
-        }
-    }
-
     /// Open audience window
     fn open_audience_window(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         use crate::views::WindowBoundsTracker;
@@ -1259,5 +832,4 @@ impl MainView {
             }
         }
     }
-
 }

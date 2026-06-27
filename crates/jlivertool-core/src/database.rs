@@ -135,6 +135,16 @@ impl Database {
         // Add archived column if it doesn't exist (migration for existing databases)
         let _ = conn.execute("ALTER TABLE superchats ADD COLUMN archived INTEGER DEFAULT 0", []);
 
+        // Nicknames table: cross-room mapping from user uid → custom nickname
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS nicknames (
+                uid INTEGER PRIMARY KEY,
+                nickname TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            )",
+            [],
+        )?;
+
         // Create indexes for common queries
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_danmus_room_timestamp ON danmus(room_id, timestamp DESC)",
@@ -593,7 +603,8 @@ impl Database {
         Ok(danmus)
     }
 
-    /// Clear all data for a room
+    /// Clear all data for a room.
+    /// Nicknames are intentionally preserved (they cross rooms).
     #[allow(dead_code)]
     pub fn clear_room_data(&self, room_id: u64) -> Result<()> {
         let conn = self.conn.lock();
@@ -602,6 +613,38 @@ impl Database {
         conn.execute("DELETE FROM guards WHERE room_id = ?1", params![room_id as i64])?;
         conn.execute("DELETE FROM superchats WHERE room_id = ?1", params![room_id as i64])?;
         Ok(())
+    }
+
+    /// Insert or replace a nickname for a uid.
+    pub fn set_nickname(&self, uid: u64, nickname: &str) -> Result<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO nicknames (uid, nickname, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(uid) DO UPDATE SET nickname = excluded.nickname, updated_at = excluded.updated_at",
+            params![uid as i64, nickname, chrono::Utc::now().timestamp()],
+        )?;
+        Ok(())
+    }
+
+    /// Remove a nickname for a uid.
+    pub fn remove_nickname(&self, uid: u64) -> Result<()> {
+        let conn = self.conn.lock();
+        conn.execute("DELETE FROM nicknames WHERE uid = ?1", params![uid as i64])?;
+        Ok(())
+    }
+
+    /// List all saved nicknames as (uid, nickname) pairs.
+    pub fn list_nicknames(&self) -> Result<Vec<(u64, String)>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare("SELECT uid, nickname FROM nicknames")?;
+        let rows = stmt
+            .query_map([], |row| {
+                let uid: i64 = row.get(0)?;
+                let nickname: String = row.get(1)?;
+                Ok((uid as u64, nickname))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     /// Update archived status for a gift

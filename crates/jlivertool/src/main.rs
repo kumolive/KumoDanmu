@@ -30,9 +30,11 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 /// Get the data directory for the application
 fn get_data_dir() -> PathBuf {
-    directories::ProjectDirs::from("com", "jlivertool", "JLiverTool")
-        .map(|d| d.config_dir().to_path_buf())
-        .unwrap_or_else(|| PathBuf::from("."))
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .map(|p| p.join("data"))
+        .unwrap_or_else(|| PathBuf::from("./data"))
 }
 
 /// Initialize logging with both console and file output
@@ -103,7 +105,7 @@ fn main() -> Result<()> {
     let _log_guard = init_logging(&data_dir)?;
 
     info!("========================================");
-    info!("JLiverTool v{}", env!("CARGO_PKG_VERSION"));
+    info!("KumoTool v{}", env!("CARGO_PKG_VERSION"));
     info!("OS: {} ({})", std::env::consts::OS, std::env::consts::ARCH);
     info!("Data directory: {:?}", data_dir);
     info!("========================================");
@@ -247,6 +249,14 @@ fn main() -> Result<()> {
             log_level: cfg.log_level.clone(),
             auto_update_check: cfg.auto_update_check,
         });
+
+        // Send saved nicknames to UI
+        let nick_map: std::collections::HashMap<u64, String> = database
+            .list_nicknames()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        let _ = event_sender.send(Event::NicknamesLoaded { map: nick_map });
 
         // Auto-check for updates on startup if enabled
         if cfg.auto_update_check {
@@ -822,6 +832,24 @@ async fn handle_commands(
                     error!("Failed to save auto_update_check: {}", e);
                 }
             }
+            UiCommand::FetchNicknames => {
+                let map: std::collections::HashMap<u64, String> = database
+                    .list_nicknames()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect();
+                let _ = event_tx.send(Event::NicknamesLoaded { map });
+            }
+            UiCommand::SetNickname { uid, nickname } => {
+                let result = match &nickname {
+                    Some(nick) => database.set_nickname(uid, nick),
+                    None => database.remove_nickname(uid),
+                };
+                if let Err(e) = result {
+                    error!("Failed to persist nickname for {}: {}", uid, e);
+                }
+                let _ = event_tx.send(Event::NicknameUpdated { uid, nickname });
+            }
         }
     }
 }
@@ -936,7 +964,7 @@ async fn run_backend(
     let initial_room = config
         .read()
         .get_room()
-        .unwrap_or_else(|| RoomId::new(0, 21484828, 0)); // Default room
+        .unwrap_or_else(|| RoomId::new(0, 1963653498, 0)); // Default room
 
     let mut current_room = initial_room;
 

@@ -3,14 +3,20 @@
 //! This module contains the unified view for rendering different types of
 //! messages in the danmu list (danmu, interact, entry effect, gift, guard, superchat).
 
-use super::content_rendering::{guard_icon_url, guard_level_name, render_content_with_links, DisplayMessage, RenderRow};
+use super::content_rendering::{
+    display_name, guard_icon_url, guard_level_name, render_content_with_links, DisplayMessage,
+    RenderRow,
+};
 use super::user_info_card::{SelectedUser, SelectedUserState};
 use crate::theme::Colors;
 use gpui::*;
 use gpui_component::h_flex;
 use jlivertool_core::messages::{
-    DanmuMessage, EntryEffectMessage, GiftMessage, GuardMessage, InteractMessage, SuperChatMessage,
+    DanmuMessage, EntryEffectMessage, GiftMessage, GuardMessage, InteractMessage,
 };
+use jlivertool_core::types::Sender;
+use std::collections::HashMap;
+use std::rc::Rc;
 
 /// Unified view for rendering any display message type
 pub struct DanmuListItemView {
@@ -18,9 +24,9 @@ pub struct DanmuListItemView {
     index: usize,
     font_size: f32,
     lite_mode: bool,
-    medal_display: bool,
     opacity: f32,
     selected_user: SelectedUserState,
+    nicknames: Rc<HashMap<u64, String>>,
 }
 
 impl DanmuListItemView {
@@ -29,19 +35,25 @@ impl DanmuListItemView {
         index: usize,
         font_size: f32,
         lite_mode: bool,
-        medal_display: bool,
+        _medal_display: bool,
         opacity: f32,
         selected_user: SelectedUserState,
+        nicknames: Rc<HashMap<u64, String>>,
     ) -> Self {
         Self {
             row,
             index,
             font_size,
             lite_mode,
-            medal_display,
             opacity,
             selected_user,
+            nicknames,
         }
+    }
+
+    /// Resolve the display label for a sender, taking a nickname (if any) into account.
+    fn label(&self, sender: &Sender) -> String {
+        display_name(&sender.uname, sender.uid, &self.nicknames)
     }
 
     fn row_height(&self) -> f32 {
@@ -58,8 +70,6 @@ impl DanmuListItemView {
         let opacity = self.opacity;
         let row_height = self.row_height();
         let sender = &danmu.sender;
-        let medal = &sender.medal_info;
-        let show_medal = self.medal_display && !medal.medal_name.is_empty() && medal.is_lighted;
 
         // Use fixed height for uniform_list
         let mut el = h_flex()
@@ -77,60 +87,6 @@ impl DanmuListItemView {
             el = el.px_2();
         }
 
-        // Medal badge
-        if show_medal && !lite_mode {
-            let (medal_bg, medal_border) = Colors::medal_colors(medal.medal_level);
-            let guard_level = medal.guard_level;
-            let medal_height = (font_size * 1.2).clamp(14.0, 20.0);
-            let medal_font_size = (font_size * 0.75).clamp(8.0, 12.0);
-
-            let mut medal_name_el = h_flex()
-                .h_full()
-                .px(px(3.0))
-                .gap(px(2.0))
-                .items_center()
-                .bg(medal_bg);
-
-            if let Some(icon_url) = guard_icon_url(guard_level) {
-                medal_name_el = medal_name_el.child(
-                    img(icon_url)
-                        .size(px(medal_height - 2.0))
-                        .object_fit(ObjectFit::Contain),
-                );
-            }
-
-            medal_name_el = medal_name_el.child(
-                div()
-                    .text_size(px(medal_font_size))
-                    .text_color(gpui::white())
-                    .child(medal.medal_name.clone()),
-            );
-
-            el = el.child(
-                h_flex()
-                    .flex_shrink_0()
-                    .h(px(medal_height))
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(medal_border)
-                    .overflow_hidden()
-                    .child(medal_name_el)
-                    .child(
-                        div()
-                            .h_full()
-                            .px(px(3.0))
-                            .min_w(px(medal_height))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .bg(gpui::white())
-                            .text_size(px(medal_font_size))
-                            .text_color(medal_bg.opacity(1.0))
-                            .child(medal.medal_level.to_string()),
-                    ),
-            );
-        }
-
         // Username
         let username_color = if danmu.is_special {
             Colors::warning()
@@ -142,9 +98,11 @@ impl DanmuListItemView {
         let selected_user = self.selected_user.clone();
         let sender_clone = sender.clone();
 
+        let label = self.label(sender);
         if lite_mode {
             let selected_user_lite = selected_user.clone();
             let sender_lite = sender_clone.clone();
+            let label_lite = label.clone();
             el = el
                 .child(
                     div()
@@ -152,7 +110,7 @@ impl DanmuListItemView {
                         .text_size(px(font_size))
                         .text_color(username_color)
                         .cursor_pointer()
-                        .child(sender.uname.clone())
+                        .child(label_lite)
                         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                             *selected_user_lite.borrow_mut() = Some(SelectedUser {
                                 sender: sender_lite.clone(),
@@ -175,7 +133,7 @@ impl DanmuListItemView {
                     .text_size(px(font_size))
                     .text_color(username_color)
                     .cursor_pointer()
-                    .child(format!("{}:", sender.uname))
+                    .child(format!("{}:", label))
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                         *selected_user.borrow_mut() = Some(SelectedUser {
                             sender: sender_clone.clone(),
@@ -295,7 +253,7 @@ impl DanmuListItemView {
                 div()
                     .text_size(px(font_size))
                     .text_color(Colors::text_muted())
-                    .child(interact.sender.uname.clone()),
+                    .child(self.label(&interact.sender)),
             )
             .child(
                 div()
@@ -349,7 +307,7 @@ impl DanmuListItemView {
             div()
                 .text_size(px(font_size))
                 .text_color(entry_color)
-                .child(format!("{} {} 进入直播间", level_name, entry.sender.uname)),
+                .child(format!("{} {} 进入直播间", level_name, self.label(&entry.sender))),
         );
 
         el
@@ -399,7 +357,7 @@ impl DanmuListItemView {
                 div()
                     .text_size(px(font_size))
                     .text_color(Colors::text_secondary())
-                    .child(gift.sender.uname.clone()),
+                    .child(self.label(&gift.sender)),
             )
             .child(
                 div()
@@ -477,7 +435,7 @@ impl DanmuListItemView {
                     .text_size(px(font_size))
                     .font_weight(FontWeight::BOLD)
                     .text_color(guard_color)
-                    .child(guard.sender.uname.clone()),
+                    .child(self.label(&guard.sender)),
             )
             .child(
                 div()
@@ -511,88 +469,6 @@ impl DanmuListItemView {
 
         el
     }
-
-    fn render_superchat(&self, sc: &SuperChatMessage) -> Div {
-        let font_size = self.font_size;
-        let lite_mode = self.lite_mode;
-        let row_height = self.row_height();
-
-        // Golden color #EDB83F for superchat
-        let sc_color = hsla(42.0 / 360.0, 0.85, 0.59, 1.0);
-
-        // Get first character of username for avatar
-        let avatar_char = sc.sender.uname.chars().next().unwrap_or('U').to_string();
-
-        // Use fixed height for uniform_list
-        let mut el = h_flex()
-            .w_full()
-            .h(px(row_height))
-            .gap_2()
-            .items_center()
-            .rounded(px(4.0))
-            .bg(sc_color.opacity(0.15))
-            .border_l_4()
-            .border_color(sc_color)
-            .overflow_hidden();
-
-        if lite_mode {
-            el = el.px_1();
-        } else {
-            el = el.px_2();
-        }
-
-        let message_el = div()
-            .flex_1()
-            .text_size(px(font_size * 0.9))
-            .text_color(Colors::text_secondary())
-            .overflow_hidden()
-            .whitespace_nowrap()
-            .text_ellipsis()
-            .child(sc.message.clone());
-
-        el = el
-            // Avatar circle with user initial
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .size(px(row_height * 0.7))
-                    .rounded_full()
-                    .bg(sc_color)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(font_size * 0.7))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(gpui::white())
-                    .child(avatar_char),
-            )
-            // Price badge
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .px(px(6.0))
-                    .py(px(2.0))
-                    .rounded(px(10.0))
-                    .bg(sc_color)
-                    .text_size(px(font_size * 0.75))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(gpui::white())
-                    .child(format!("¥{}", sc.price)),
-            )
-            // Username
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_size(px(font_size * 0.9))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(Colors::text_primary())
-                    .child(sc.sender.uname.clone()),
-            )
-            // Message with tooltip
-            .child(message_el);
-
-        el
-    }
 }
 
 impl Render for DanmuListItemView {
@@ -613,7 +489,6 @@ impl DanmuListItemView {
                 DisplayMessage::EntryEffect(entry) => self.render_entry_effect(entry),
                 DisplayMessage::Gift(gift) => self.render_gift(gift),
                 DisplayMessage::Guard(guard) => self.render_guard(guard),
-                DisplayMessage::SuperChat(sc) => self.render_superchat(sc),
             },
             RenderRow::DanmuFirstLine { danmu, content_slice } => {
                 self.render_danmu_first_line(danmu, content_slice)
@@ -621,24 +496,16 @@ impl DanmuListItemView {
             RenderRow::DanmuContinuation { danmu, content_slice, continuation_index } => {
                 self.render_danmu_continuation(danmu, content_slice, *continuation_index)
             }
-            RenderRow::SuperChatHeader { sc } => {
-                self.render_superchat_header(sc)
-            }
-            RenderRow::SuperChatContent { sc, content_slice, continuation_index, is_last } => {
-                self.render_superchat_content(sc, content_slice, *continuation_index, *is_last)
-            }
         }
     }
 
-    /// Render the first line of a wrapped danmu (medal + username + partial content)
+    /// Render the first line of a wrapped danmu (username + partial content)
     fn render_danmu_first_line(&self, danmu: &DanmuMessage, content_slice: &str) -> Div {
         let font_size = self.font_size;
         let lite_mode = self.lite_mode;
         let opacity = self.opacity;
         let row_height = self.row_height();
         let sender = &danmu.sender;
-        let medal = &sender.medal_info;
-        let show_medal = self.medal_display && !medal.medal_name.is_empty() && medal.is_lighted;
 
         let mut el = h_flex()
             .w_full()
@@ -655,60 +522,6 @@ impl DanmuListItemView {
             el = el.px_2();
         }
 
-        // Medal badge (same as render_danmu)
-        if show_medal && !lite_mode {
-            let (medal_bg, medal_border) = Colors::medal_colors(medal.medal_level);
-            let guard_level = medal.guard_level;
-            let medal_height = (font_size * 1.2).clamp(14.0, 20.0);
-            let medal_font_size = (font_size * 0.75).clamp(8.0, 12.0);
-
-            let mut medal_name_el = h_flex()
-                .h_full()
-                .px(px(3.0))
-                .gap(px(2.0))
-                .items_center()
-                .bg(medal_bg);
-
-            if let Some(icon_url) = guard_icon_url(guard_level) {
-                medal_name_el = medal_name_el.child(
-                    img(icon_url)
-                        .size(px(medal_height - 2.0))
-                        .object_fit(ObjectFit::Contain),
-                );
-            }
-
-            medal_name_el = medal_name_el.child(
-                div()
-                    .text_size(px(medal_font_size))
-                    .text_color(gpui::white())
-                    .child(medal.medal_name.clone()),
-            );
-
-            el = el.child(
-                h_flex()
-                    .flex_shrink_0()
-                    .h(px(medal_height))
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(medal_border)
-                    .overflow_hidden()
-                    .child(medal_name_el)
-                    .child(
-                        div()
-                            .h_full()
-                            .px(px(3.0))
-                            .min_w(px(medal_height))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .bg(gpui::white())
-                            .text_size(px(medal_font_size))
-                            .text_color(medal_bg.opacity(1.0))
-                            .child(medal.medal_level.to_string()),
-                    ),
-            );
-        }
-
         // Username
         let username_color = if danmu.is_special {
             Colors::warning()
@@ -720,9 +533,11 @@ impl DanmuListItemView {
         let selected_user = self.selected_user.clone();
         let sender_clone = sender.clone();
 
+        let label = self.label(sender);
         if lite_mode {
             let selected_user_lite = selected_user.clone();
             let sender_lite = sender_clone.clone();
+            let label_lite = label.clone();
             el = el
                 .child(
                     div()
@@ -730,7 +545,7 @@ impl DanmuListItemView {
                         .text_size(px(font_size))
                         .text_color(username_color)
                         .cursor_pointer()
-                        .child(sender.uname.clone())
+                        .child(label_lite)
                         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                             *selected_user_lite.borrow_mut() = Some(SelectedUser {
                                 sender: sender_lite.clone(),
@@ -753,7 +568,7 @@ impl DanmuListItemView {
                     .text_size(px(font_size))
                     .text_color(username_color)
                     .cursor_pointer()
-                    .child(format!("{}:", sender.uname))
+                    .child(format!("{}:", label))
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                         *selected_user.borrow_mut() = Some(SelectedUser {
                             sender: sender_clone.clone(),
@@ -817,119 +632,6 @@ impl DanmuListItemView {
         el = el.child(
             render_content_with_links(content_slice, font_size, Colors::text_primary(), item_index)
                 .id(SharedString::from(format!("cont-{}", item_index)))
-                .flex_1()
-                .overflow_hidden(),
-        );
-
-        el
-    }
-
-    /// Render superchat header row: avatar + price + username
-    fn render_superchat_header(&self, sc: &SuperChatMessage) -> Div {
-        let font_size = self.font_size;
-        let lite_mode = self.lite_mode;
-        let row_height = self.row_height();
-
-        let sc_color = hsla(42.0 / 360.0, 0.85, 0.59, 1.0);
-        let avatar_char = sc.sender.uname.chars().next().unwrap_or('U').to_string();
-
-        let mut el = h_flex()
-            .w_full()
-            .h(px(row_height))
-            .gap_2()
-            .items_center()
-            .rounded_t(px(4.0))
-            .bg(sc_color.opacity(0.15))
-            .border_l_4()
-            .border_t_1()
-            .border_color(sc_color)
-            .overflow_hidden();
-
-        if lite_mode {
-            el = el.px_1();
-        } else {
-            el = el.px_2();
-        }
-
-        el = el
-            // Avatar circle with user initial
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .size(px(row_height * 0.7))
-                    .rounded_full()
-                    .bg(sc_color)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(font_size * 0.7))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(gpui::white())
-                    .child(avatar_char),
-            )
-            // Price badge
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .px(px(6.0))
-                    .py(px(2.0))
-                    .rounded(px(10.0))
-                    .bg(sc_color)
-                    .text_size(px(font_size * 0.75))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(gpui::white())
-                    .child(format!("¥{}", sc.price)),
-            )
-            // Username
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_size(px(font_size * 0.9))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(Colors::text_primary())
-                    .child(sc.sender.uname.clone()),
-            );
-
-        el
-    }
-
-    /// Render superchat content row: message text with SC styling
-    fn render_superchat_content(
-        &self,
-        _sc: &SuperChatMessage,
-        content_slice: &str,
-        _continuation_index: usize,
-        is_last: bool,
-    ) -> Div {
-        let font_size = self.font_size;
-        let lite_mode = self.lite_mode;
-        let row_height = self.row_height();
-        let item_index = self.index;
-
-        let sc_color = hsla(42.0 / 360.0, 0.85, 0.59, 1.0);
-
-        let mut el = h_flex()
-            .w_full()
-            .h(px(row_height))
-            .items_center()
-            .bg(sc_color.opacity(0.15))
-            .border_l_4()
-            .border_color(sc_color)
-            .overflow_hidden();
-
-        if is_last {
-            el = el.rounded_b(px(4.0)).border_b_1();
-        }
-
-        if lite_mode {
-            el = el.px_1();
-        } else {
-            el = el.px_2();
-        }
-
-        el = el.child(
-            render_content_with_links(content_slice, font_size * 0.9, Colors::text_secondary(), item_index)
-                .id(SharedString::from(format!("sc-cont-{}", item_index)))
                 .flex_1()
                 .overflow_hidden(),
         );

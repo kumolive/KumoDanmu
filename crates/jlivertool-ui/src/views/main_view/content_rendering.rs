@@ -9,10 +9,32 @@ use crate::theme::Colors;
 use gpui::*;
 use gpui_component::h_flex;
 use jlivertool_core::messages::{
-    DanmuMessage, EntryEffectMessage, GiftMessage, GuardMessage, InteractMessage, SuperChatMessage,
+    DanmuMessage, EntryEffectMessage, GiftMessage, GuardMessage, InteractMessage,
 };
 use regex::Regex;
+use std::collections::HashMap;
 use std::sync::LazyLock;
+
+/// Abbreviate a username to first + asterisks + last when it has 3+ chars.
+/// 1–2 char names are returned unchanged. CJK-friendly (works on `char`s, not bytes).
+pub fn abbreviate_uname(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    match chars.len() {
+        0..=2 => s.to_string(),
+        3 => format!("{}*{}", chars[0], chars[2]),
+        _ => format!("{}**{}", chars[0], chars[chars.len() - 1]),
+    }
+}
+
+/// Compute the display label for a sender:
+/// - With nickname: `nickname(abbreviated_uname)`
+/// - Without nickname: full `uname`
+pub fn display_name(uname: &str, uid: u64, nicks: &HashMap<u64, String>) -> String {
+    match nicks.get(&uid) {
+        Some(n) if !n.is_empty() => format!("{}({})", n, abbreviate_uname(uname)),
+        _ => uname.to_string(),
+    }
+}
 
 /// Static regex for matching BV video IDs (compiled once)
 static BV_REGEX: LazyLock<Regex> =
@@ -97,18 +119,16 @@ pub enum DisplayMessage {
     EntryEffect(EntryEffectMessage),
     Gift(GiftMessage),
     Guard(GuardMessage),
-    SuperChat(SuperChatMessage),
 }
 
 /// A single row in the rendered danmu list.
 /// For messages that fit in one line, there is one RenderRow per DisplayMessage.
 /// For long danmu messages, the content is split across two RenderRows.
-/// SuperChat messages are always split into header + content rows.
 #[derive(Clone)]
 pub enum RenderRow {
     /// A complete message that fits in one row
     Full(DisplayMessage),
-    /// First row of a wrapped danmu: shows medal + username + first portion of content
+    /// First row of a wrapped danmu: shows username + first portion of content
     DanmuFirstLine {
         danmu: DanmuMessage,
         content_slice: String,
@@ -118,17 +138,6 @@ pub enum RenderRow {
         danmu: DanmuMessage,
         content_slice: String,
         continuation_index: usize,
-    },
-    /// SuperChat header row: avatar + price + username
-    SuperChatHeader {
-        sc: SuperChatMessage,
-    },
-    /// SuperChat content row: message text
-    SuperChatContent {
-        sc: SuperChatMessage,
-        content_slice: String,
-        continuation_index: usize,
-        is_last: bool,
     },
 }
 
@@ -148,8 +157,10 @@ pub fn estimate_text_width(text: &str, font_size: f32) -> f32 {
 }
 
 /// Estimate the pixel width of the prefix elements (medal badge + username + colon + gaps).
+/// `display_label` is the actual string rendered for the sender (may include nickname).
 pub fn estimate_danmu_prefix_width(
     danmu: &DanmuMessage,
+    display_label: &str,
     font_size: f32,
     lite_mode: bool,
     medal_display: bool,
@@ -182,9 +193,9 @@ pub fn estimate_danmu_prefix_width(
 
     // Username text
     let uname_text = if lite_mode {
-        sender.uname.clone()
+        display_label.to_string()
     } else {
-        format!("{}:", sender.uname)
+        format!("{}:", display_label)
     };
     width += estimate_text_width(&uname_text, font_size);
 
