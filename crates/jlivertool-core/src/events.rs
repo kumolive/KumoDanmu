@@ -69,6 +69,8 @@ pub enum Event {
         max_danmu_count: usize,
         log_level: String,
         auto_update_check: bool,
+        fold_timeout: u32,
+        fold_lookback: u8,
     },
 
     /// Detail window data updated

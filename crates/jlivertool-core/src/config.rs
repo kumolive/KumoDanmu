@@ -172,12 +172,26 @@ pub struct Config {
     #[serde(default = "default_tts_volume")]
     pub tts_volume: f32,
 
+    #[serde(default = "default_fold_timeout")]
+    pub fold_timeout: u32,
+
+    #[serde(default = "default_fold_lookback")]
+    pub fold_lookback: u8,
+
     #[serde(default = "default_auto_update_check")]
     pub auto_update_check: bool,
 
     // Extra fields for extensibility
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
+}
+
+fn default_fold_timeout() -> u32 {
+    10
+}
+
+fn default_fold_lookback() -> u8 {
+    10
 }
 
 fn default_auto_update_check() -> bool {
@@ -247,6 +261,8 @@ impl Default for Config {
             tts_gift_enabled: false,
             tts_sc_enabled: false,
             tts_volume: default_tts_volume(),
+            fold_timeout: default_fold_timeout(),
+            fold_lookback: default_fold_lookback(),
             auto_update_check: default_auto_update_check(),
             extra: HashMap::new(),
         }

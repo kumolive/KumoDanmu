@@ -14,7 +14,10 @@ mod render;
 mod user_info_card;
 
 pub use content_rendering::{render_content_with_links, DisplayMessage, RenderRow};
-use content_rendering::{display_name, estimate_danmu_prefix_width, estimate_text_width, split_content_to_lines};
+use content_rendering::{
+    are_messages_equivalent, display_name, estimate_danmu_prefix_width, estimate_text_width,
+    message_timestamp, split_content_to_lines,
+};
 use danmu_list_item::DanmuListItemView;
 use user_info_card::{SelectedUserState, UserInfoCard};
 
@@ -89,6 +92,10 @@ pub struct MainView {
     always_on_top: bool,
     // Flag to apply always_on_top on next render
     pending_always_on_top: Option<bool>,
+    // Danmu folding timeout in seconds (consecutive identical messages within this window are folded)
+    fold_timeout: u32,
+    // Max Full rows to scan backwards when looking for a fold match
+    fold_lookback: u8,
     // Click-through mode
     click_through: bool,
     // Pending click-through change from tray (Arc for thread-safe sharing)
@@ -217,7 +224,7 @@ impl MainView {
                         // Remove interact messages if interact_display was disabled
                         if old_interact_display && !interact_display {
                             view.danmu_list
-                                .retain(|msg| !matches!(msg, DisplayMessage::Interact(_)));
+                                .retain(|msg| !matches!(msg, DisplayMessage::Interact(_, _)));
                         }
 
                         // Remove entry effect messages based on settings changes
@@ -225,7 +232,7 @@ impl MainView {
                             || (old_level_effect && !level_effect)
                         {
                             view.danmu_list.retain(|msg| {
-                                if let DisplayMessage::EntryEffect(entry) = msg {
+                                if let DisplayMessage::EntryEffect(entry, _) = msg {
                                     let is_guard =
                                         entry.privilege_type >= 1 && entry.privilege_type <= 3;
                                     if is_guard {
@@ -338,6 +345,8 @@ impl MainView {
             level_effect: false,
             always_on_top: false,
             pending_always_on_top: None,
+            fold_timeout: 10,
+            fold_lookback: 10,
             click_through: false,
             pending_click_through: Arc::new(AtomicBool::new(false)),
             scroll_handle: UniformListScrollHandle::new(),
@@ -485,20 +494,45 @@ impl MainView {
         }
     }
 
+    /// Try to fold `msg` into a recent equivalent Full row within the timeout window
+    fn try_fold_last(&self, rows: &mut Vec<RenderRow>, msg: &DisplayMessage) -> bool {
+        let cur_ts = message_timestamp(msg);
+        let mut checked = 0u8;
+        for i in (0..rows.len()).rev() {
+            if let RenderRow::Full(ref mut existing, ref mut count, ref mut anchor_ts) = rows[i] {
+                if cur_ts - *anchor_ts > self.fold_timeout as i64 {
+                    return false;
+                }
+                if are_messages_equivalent(existing, msg) {
+                    *count += 1;
+                    *anchor_ts = cur_ts;
+                    return true;
+                }
+                checked += 1;
+                if checked >= self.fold_lookback {
+                    return false;
+                }
+            }
+        }
+        false
+    }
+
     /// Fully rebuild render_rows from danmu_list for the given window width.
     fn rebuild_render_rows(&mut self, window_width: f32) {
         let mut rows = Vec::new();
         let available_width = window_width - 14.0; // scrollbar buffer
         for msg in self.danmu_list.iter() {
-            Self::append_message_rows(
-                &mut rows,
-                msg,
-                available_width,
-                self.font_size,
-                self.lite_mode,
-                self.medal_display,
-                &self.nicknames,
-            );
+            if !self.try_fold_last(&mut rows, msg) {
+                Self::append_message_rows(
+                    &mut rows,
+                    msg,
+                    available_width,
+                    self.font_size,
+                    self.lite_mode,
+                    self.medal_display,
+                    &self.nicknames,
+                );
+            }
         }
         self.render_rows = Rc::new(rows);
         self.last_render_width = window_width;
@@ -527,15 +561,17 @@ impl MainView {
         let new_start = self.render_rows_source_count;
         for i in new_start..current_source_len {
             let msg = &self.danmu_list[i];
-            Self::append_message_rows(
-                &mut rows,
-                msg,
-                available_width,
-                self.font_size,
-                self.lite_mode,
-                self.medal_display,
-                &self.nicknames,
-            );
+            if !self.try_fold_last(&mut rows, msg) {
+                Self::append_message_rows(
+                    &mut rows,
+                    msg,
+                    available_width,
+                    self.font_size,
+                    self.lite_mode,
+                    self.medal_display,
+                    &self.nicknames,
+                );
+            }
         }
 
         self.render_rows = Rc::new(rows);
@@ -553,10 +589,10 @@ impl MainView {
         nicknames: &HashMap<u64, String>,
     ) {
         match msg {
-            DisplayMessage::Danmu(danmu) => {
+            DisplayMessage::Danmu(danmu, _) => {
                 // Skip wrapping for emoji danmu
                 if danmu.emoji_content.is_some() {
-                    rows.push(RenderRow::Full(msg.clone()));
+                    rows.push(RenderRow::Full(msg.clone(), 1, message_timestamp(msg)));
                     return;
                 }
 
@@ -570,7 +606,7 @@ impl MainView {
 
                 let content_width = estimate_text_width(&danmu.content, font_size);
                 if content_width <= first_line_content_width || first_line_content_width <= 0.0 {
-                    rows.push(RenderRow::Full(msg.clone()));
+                    rows.push(RenderRow::Full(msg.clone(), 1, message_timestamp(msg)));
                 } else {
                     let lines = split_content_to_lines(
                         &danmu.content,
@@ -580,7 +616,7 @@ impl MainView {
                     );
 
                     if lines.len() <= 1 {
-                        rows.push(RenderRow::Full(msg.clone()));
+                        rows.push(RenderRow::Full(msg.clone(), 1, message_timestamp(msg)));
                     } else {
                         rows.push(RenderRow::DanmuFirstLine {
                             danmu: danmu.clone(),
@@ -597,7 +633,7 @@ impl MainView {
                 }
             }
             _ => {
-                rows.push(RenderRow::Full(msg.clone()));
+                rows.push(RenderRow::Full(msg.clone(), 1, message_timestamp(msg)));
             }
         }
     }

@@ -9,6 +9,7 @@ use super::content_rendering::{
 };
 use super::user_info_card::{SelectedUser, SelectedUserState};
 use crate::theme::Colors;
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::h_flex;
 use jlivertool_core::messages::{
@@ -64,7 +65,15 @@ impl DanmuListItemView {
         }
     }
 
-    fn render_danmu(&self, danmu: &DanmuMessage) -> Div {
+    fn fold_badge(fold_count: u32, font_size: f32, color: Hsla) -> Div {
+        div()
+            .text_size(px(font_size * 0.85))
+            .font_weight(FontWeight::BOLD)
+            .text_color(color)
+            .child(format!("×{}", fold_count))
+    }
+
+    fn render_danmu(&self, danmu: &DanmuMessage, fold_count: u32) -> Div {
         let font_size = self.font_size;
         let lite_mode = self.lite_mode;
         let opacity = self.opacity;
@@ -218,10 +227,14 @@ impl DanmuListItemView {
             );
         }
 
+        el = el.when(fold_count > 1, |el| {
+            el.child(Self::fold_badge(fold_count, font_size, Colors::text_muted()))
+        });
+
         el
     }
 
-    fn render_interact(&self, interact: &InteractMessage) -> Div {
+    fn render_interact(&self, interact: &InteractMessage, fold_count: u32) -> Div {
         let font_size = self.font_size;
         let lite_mode = self.lite_mode;
         let opacity = self.opacity;
@@ -262,10 +275,14 @@ impl DanmuListItemView {
                     .child(action_text),
             );
 
+        el = el.when(fold_count > 1, |el| {
+            el.child(Self::fold_badge(fold_count, font_size, Colors::text_muted()))
+        });
+
         el
     }
 
-    fn render_entry_effect(&self, entry: &EntryEffectMessage) -> Div {
+    fn render_entry_effect(&self, entry: &EntryEffectMessage, fold_count: u32) -> Div {
         let font_size = self.font_size;
         let lite_mode = self.lite_mode;
         let opacity = self.opacity;
@@ -310,10 +327,14 @@ impl DanmuListItemView {
                 .child(format!("{} {} 进入直播间", level_name, self.label(&entry.sender))),
         );
 
+        el = el.when(fold_count > 1, |el| {
+            el.child(Self::fold_badge(fold_count, font_size, entry_color))
+        });
+
         el
     }
 
-    fn render_gift(&self, gift: &GiftMessage) -> Div {
+    fn render_gift(&self, gift: &GiftMessage, fold_count: u32) -> Div {
         let font_size = self.font_size;
         let lite_mode = self.lite_mode;
         let opacity = self.opacity;
@@ -388,10 +409,14 @@ impl DanmuListItemView {
             );
         }
 
+        el = el.when(fold_count > 1, |el| {
+            el.child(Self::fold_badge(fold_count, font_size, gift_color))
+        });
+
         el
     }
 
-    fn render_guard(&self, guard: &GuardMessage) -> Div {
+    fn render_guard(&self, guard: &GuardMessage, fold_count: u32) -> Div {
         let font_size = self.font_size;
         let lite_mode = self.lite_mode;
         let row_height = self.row_height();
@@ -467,6 +492,10 @@ impl DanmuListItemView {
             );
         }
 
+        el = el.when(fold_count > 1, |el| {
+            el.child(Self::fold_badge(fold_count, font_size, guard_color))
+        });
+
         el
     }
 }
@@ -483,12 +512,12 @@ impl DanmuListItemView {
     /// reset tooltip state on each render.
     pub fn render_element(&self) -> Div {
         match &self.row {
-            RenderRow::Full(msg) => match msg {
-                DisplayMessage::Danmu(danmu) => self.render_danmu(danmu),
-                DisplayMessage::Interact(interact) => self.render_interact(interact),
-                DisplayMessage::EntryEffect(entry) => self.render_entry_effect(entry),
-                DisplayMessage::Gift(gift) => self.render_gift(gift),
-                DisplayMessage::Guard(guard) => self.render_guard(guard),
+            RenderRow::Full(msg, fold_count, _) => match msg {
+                DisplayMessage::Danmu(danmu, _) => self.render_danmu(danmu, *fold_count),
+                DisplayMessage::Interact(interact, _) => self.render_interact(interact, *fold_count),
+                DisplayMessage::EntryEffect(entry, _) => self.render_entry_effect(entry, *fold_count),
+                DisplayMessage::Gift(gift, _) => self.render_gift(gift, *fold_count),
+                DisplayMessage::Guard(guard, _) => self.render_guard(guard, *fold_count),
             },
             RenderRow::DanmuFirstLine { danmu, content_slice } => {
                 self.render_danmu_first_line(danmu, content_slice)

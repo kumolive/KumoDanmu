@@ -29,8 +29,9 @@ impl MainView {
                     if let Some(db) = &self.database {
                         if is_new_room {
                             if let Ok(recent_danmus) = db.get_danmus_since(real_id, 30) {
+                                let ts = chrono::Utc::now().timestamp();
                                 for danmu in recent_danmus {
-                                    self.danmu_list.push_back(DisplayMessage::Danmu(danmu));
+                                    self.danmu_list.push_back(DisplayMessage::Danmu(danmu, ts));
                                 }
                                 while self.danmu_list.len() > MAX_DANMU_COUNT {
                                     self.danmu_list.pop_front();
@@ -58,7 +59,8 @@ impl MainView {
                 Event::NewDanmu(danmu) => {
                     if !danmu.is_generated {
                         let should_auto_scroll = self.is_at_bottom();
-                        self.danmu_list.push_back(DisplayMessage::Danmu(danmu));
+                        let ts = chrono::Utc::now().timestamp();
+                        self.danmu_list.push_back(DisplayMessage::Danmu(danmu, ts));
                         if should_auto_scroll {
                             while self.danmu_list.len() > MAX_DANMU_COUNT {
                                 self.danmu_list.pop_front();
@@ -71,8 +73,9 @@ impl MainView {
                 Event::NewInteract(interact) => {
                     if self.interact_display {
                         let should_auto_scroll = self.is_at_bottom();
+                        let ts = chrono::Utc::now().timestamp();
                         self.danmu_list
-                            .push_back(DisplayMessage::Interact(interact));
+                            .push_back(DisplayMessage::Interact(interact, ts));
                         if should_auto_scroll {
                             while self.danmu_list.len() > MAX_DANMU_COUNT {
                                 self.danmu_list.pop_front();
@@ -92,8 +95,9 @@ impl MainView {
 
                     if should_display {
                         let should_auto_scroll = self.is_at_bottom();
+                        let ts = chrono::Utc::now().timestamp();
                         self.danmu_list
-                            .push_back(DisplayMessage::EntryEffect(entry));
+                            .push_back(DisplayMessage::EntryEffect(entry, ts));
                         if should_auto_scroll {
                             while self.danmu_list.len() > MAX_DANMU_COUNT {
                                 self.danmu_list.pop_front();
@@ -105,7 +109,8 @@ impl MainView {
                 }
                 Event::NewGift(gift) => {
                     let should_auto_scroll = self.is_at_bottom();
-                    self.danmu_list.push_back(DisplayMessage::Gift(gift));
+                    let ts = chrono::Utc::now().timestamp();
+                    self.danmu_list.push_back(DisplayMessage::Gift(gift, ts));
                     if should_auto_scroll {
                         while self.danmu_list.len() > MAX_DANMU_COUNT {
                             self.danmu_list.pop_front();
@@ -116,7 +121,8 @@ impl MainView {
                 }
                 Event::NewGuard(guard) => {
                     let should_auto_scroll = self.is_at_bottom();
-                    self.danmu_list.push_back(DisplayMessage::Guard(guard));
+                    let ts = chrono::Utc::now().timestamp();
+                    self.danmu_list.push_back(DisplayMessage::Guard(guard, ts));
                     if should_auto_scroll {
                         while self.danmu_list.len() > MAX_DANMU_COUNT {
                             self.danmu_list.pop_front();
@@ -183,6 +189,8 @@ impl MainView {
                     max_danmu_count,
                     log_level,
                     auto_update_check,
+                    fold_timeout,
+                    fold_lookback,
                 } => {
                     crate::theme::set_theme(&theme);
 
@@ -218,6 +226,8 @@ impl MainView {
                     self.guard_effect = guard_effect;
                     self.level_effect = level_effect;
                     self.always_on_top = always_on_top;
+                    self.fold_timeout = fold_timeout;
+                    self.fold_lookback = fold_lookback;
                     // Force rebuild of render rows
                     self.last_render_width = 0.0;
                     self.render_rows_source_count = 0;

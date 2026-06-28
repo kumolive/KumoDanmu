@@ -125,7 +125,7 @@ fn main() -> Result<()> {
     let event_sender = EventSender::new(event_tx.clone(), has_events.clone());
 
     // Initialize database
-    let db_path = config.read().data_dir().join("jlivertool.db");
+    let db_path = config.read().data_dir().join("storage.db");
     let database = Arc::new(Database::new(&db_path)?);
     info!("Database initialized at {:?}", db_path);
 
@@ -248,6 +248,8 @@ fn main() -> Result<()> {
             max_danmu_count: cfg.max_danmu_count,
             log_level: cfg.log_level.clone(),
             auto_update_check: cfg.auto_update_check,
+            fold_timeout: cfg.fold_timeout,
+            fold_lookback: cfg.fold_lookback,
         });
 
         // Send saved nicknames to UI

@@ -111,14 +111,27 @@ pub fn render_content_with_links(
         .child(container)
 }
 
-/// Unified display message type for the danmu list
+/// Unified display message type for the danmu list.
+/// Each variant carries a Unix timestamp (seconds) recording when the message was received.
 #[derive(Clone)]
 pub enum DisplayMessage {
-    Danmu(DanmuMessage),
-    Interact(InteractMessage),
-    EntryEffect(EntryEffectMessage),
-    Gift(GiftMessage),
-    Guard(GuardMessage),
+    Danmu(DanmuMessage, i64),
+    Interact(InteractMessage, i64),
+    EntryEffect(EntryEffectMessage, i64),
+    Gift(GiftMessage, i64),
+    Guard(GuardMessage, i64),
+}
+
+/// Extract the received-at timestamp from a DisplayMessage.
+#[inline]
+pub fn message_timestamp(msg: &DisplayMessage) -> i64 {
+    match msg {
+        DisplayMessage::Danmu(_, ts)
+        | DisplayMessage::Interact(_, ts)
+        | DisplayMessage::EntryEffect(_, ts)
+        | DisplayMessage::Gift(_, ts)
+        | DisplayMessage::Guard(_, ts) => *ts,
+    }
 }
 
 /// A single row in the rendered danmu list.
@@ -126,8 +139,9 @@ pub enum DisplayMessage {
 /// For long danmu messages, the content is split across two RenderRows.
 #[derive(Clone)]
 pub enum RenderRow {
-    /// A complete message that fits in one row
-    Full(DisplayMessage),
+    /// A complete message that fits in one row, with fold count (1 = no folding)
+    /// and fold-anchor timestamp for time-window tracking.
+    Full(DisplayMessage, u32, i64),
     /// First row of a wrapped danmu: shows username + first portion of content
     DanmuFirstLine {
         danmu: DanmuMessage,
@@ -139,6 +153,20 @@ pub enum RenderRow {
         content_slice: String,
         continuation_index: usize,
     },
+}
+
+/// Check if two DisplayMessages are equivalent for folding purposes.
+/// Consecutive equivalent messages are collapsed into a single row with a count badge.
+pub fn are_messages_equivalent(a: &DisplayMessage, b: &DisplayMessage) -> bool {
+    match (a, b) {
+        (DisplayMessage::Danmu(da, _), DisplayMessage::Danmu(db, _)) => {
+            da.content == db.content && da.sender.uid == db.sender.uid
+        }
+        (DisplayMessage::Gift(ga, _), DisplayMessage::Gift(gb, _)) => {
+            ga.gift_info.id == gb.gift_info.id && ga.sender.uid == gb.sender.uid
+        }
+        _ => false,
+    }
 }
 
 /// Estimate the rendered width of a string in pixels.
