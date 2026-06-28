@@ -1,6 +1,6 @@
 //! SQLite database for storing danmus, gifts, guards, and superchats
 
-use crate::messages::{DanmuMessage, GiftMessage, GuardMessage, SuperChatMessage};
+use crate::messages::{DanmuMessage, GiftMessage, GuardMessage, HistoryEntry, SuperChatMessage};
 use crate::types::{MedalInfo, Sender};
 use anyhow::Result;
 use parking_lot::Mutex;
@@ -576,6 +576,151 @@ impl Database {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(danmus)
+    }
+
+    /// Get messages of all types before a given timestamp, for infinite scroll history.
+    /// Queries danmus, gifts, and guards tables, merges by timestamp DESC, returns up to `limit` entries.
+    pub fn get_messages_before(
+        &self,
+        room_id: u64,
+        before_ts: i64,
+        limit: u32,
+    ) -> Result<Vec<HistoryEntry>> {
+        let conn = self.conn.lock();
+        let rid = room_id as i64;
+        let lim = limit as i64;
+        let before = before_ts;
+
+        let mut entries: Vec<HistoryEntry> = Vec::with_capacity(limit as usize * 2);
+
+        // Query danmus
+        {
+            let mut stmt = conn.prepare(
+                "SELECT sender_uid, sender_uname, sender_face,
+                        medal_level, medal_name, medal_anchor_uname, medal_anchor_roomid, medal_guard_level,
+                        content, is_special, timestamp
+                 FROM danmus
+                 WHERE room_id = ?1 AND timestamp < ?2
+                 ORDER BY timestamp DESC
+                 LIMIT ?3",
+            )?;
+            let rows = stmt.query_map(params![rid, before, lim], |row| {
+                Ok(HistoryEntry::Danmu(
+                    DanmuMessage {
+                        sender: Sender {
+                            uid: row.get::<_, i64>(0)? as u64,
+                            uname: row.get(1)?,
+                            face: row.get(2)?,
+                            medal_info: MedalInfo {
+                                medal_level: row.get::<_, i64>(3)? as u8,
+                                medal_name: row.get(4)?,
+                                anchor_uname: row.get(5)?,
+                                anchor_roomid: row.get::<_, i64>(6)? as u64,
+                                guard_level: row.get::<_, i64>(7)? as u8,
+                                ..Default::default()
+                            },
+                        },
+                        content: row.get(8)?,
+                        is_special: row.get::<_, i64>(9)? != 0,
+                        is_generated: false,
+                        is_mirror: false,
+                        emoji_content: None,
+                        side_index: -1,
+                        reply_uname: None,
+                    },
+                    row.get(10)?,
+                ))
+            })?;
+            for row in rows {
+                entries.push(row?);
+            }
+        }
+
+        // Query gifts
+        {
+            let mut stmt = conn.prepare(
+                "SELECT id, room_id, sender_uid, sender_uname, sender_face,
+                        medal_level, medal_name,
+                        gift_id, gift_name, gift_price, coin_type, action, num, timestamp,
+                        COALESCE(archived, 0) as archived
+                 FROM gifts
+                 WHERE room_id = ?1 AND timestamp < ?2
+                 ORDER BY timestamp DESC
+                 LIMIT ?3",
+            )?;
+            let rows = stmt.query_map(params![rid, before, lim], |row| {
+                Ok(HistoryEntry::Gift(GiftMessage {
+                    id: row.get(0)?,
+                    room: row.get::<_, i64>(1)? as u64,
+                    sender: Sender {
+                        uid: row.get::<_, i64>(2)? as u64,
+                        uname: row.get(3)?,
+                        face: row.get(4)?,
+                        medal_info: MedalInfo {
+                            medal_level: row.get::<_, i64>(5)? as u8,
+                            medal_name: row.get(6)?,
+                            ..Default::default()
+                        },
+                    },
+                    gift_info: crate::messages::GiftInfo {
+                        id: row.get::<_, i64>(7)? as u64,
+                        name: row.get(8)?,
+                        price: row.get::<_, i64>(9)? as u64,
+                        coin_type: row.get(10)?,
+                        img_basic: String::new(),
+                        img_dynamic: String::new(),
+                        gif: String::new(),
+                        webp: String::new(),
+                    },
+                    action: row.get(11)?,
+                    num: row.get::<_, i64>(12)? as u32,
+                    timestamp: row.get(13)?,
+                    archived: row.get::<_, i64>(14)? != 0,
+                }))
+            })?;
+            for row in rows {
+                entries.push(row?);
+            }
+        }
+
+        // Query guards
+        {
+            let mut stmt = conn.prepare(
+                "SELECT id, room_id, sender_uid, sender_uname, sender_face,
+                        num, unit, guard_level, price, timestamp,
+                        COALESCE(archived, 0) as archived
+                 FROM guards
+                 WHERE room_id = ?1 AND timestamp < ?2
+                 ORDER BY timestamp DESC
+                 LIMIT ?3",
+            )?;
+            let rows = stmt.query_map(params![rid, before, lim], |row| {
+                Ok(HistoryEntry::Guard(GuardMessage {
+                    id: row.get(0)?,
+                    room: row.get::<_, i64>(1)? as u64,
+                    sender: Sender {
+                        uid: row.get::<_, i64>(2)? as u64,
+                        uname: row.get(3)?,
+                        face: row.get(4)?,
+                        ..Default::default()
+                    },
+                    num: row.get::<_, i64>(5)? as u32,
+                    unit: row.get(6)?,
+                    guard_level: row.get::<_, i64>(7)? as u8,
+                    price: row.get::<_, i64>(8)? as u64,
+                    timestamp: row.get(9)?,
+                    archived: row.get::<_, i64>(10)? != 0,
+                }))
+            })?;
+            for row in rows {
+                entries.push(row?);
+            }
+        }
+
+        // Merge: sort by timestamp DESC, take top `limit`
+        entries.sort_unstable_by_key(|e| std::cmp::Reverse(e.timestamp()));
+        entries.truncate(limit as usize);
+        Ok(entries)
     }
 
     /// Get danmus by user UID with timestamp

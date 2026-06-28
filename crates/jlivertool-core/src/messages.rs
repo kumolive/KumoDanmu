@@ -569,6 +569,25 @@ impl WarningMessage {
     }
 }
 
+/// Unified history entry for database queries.
+/// Used to merge messages of different types sorted by timestamp.
+#[derive(Debug, Clone)]
+pub enum HistoryEntry {
+    Danmu(DanmuMessage, i64),
+    Gift(GiftMessage),
+    Guard(GuardMessage),
+}
+
+impl HistoryEntry {
+    pub fn timestamp(&self) -> i64 {
+        match self {
+            HistoryEntry::Danmu(_, ts) => *ts,
+            HistoryEntry::Gift(g) => g.timestamp,
+            HistoryEntry::Guard(g) => g.timestamp,
+        }
+    }
+}
+
 /// Cut off message from Bilibili (live stream cut off)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CutOffMessage {

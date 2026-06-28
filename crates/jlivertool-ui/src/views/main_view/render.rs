@@ -577,10 +577,16 @@ impl Render for MainView {
             });
         }
 
-        // Update render rows (incremental if width unchanged, full rebuild if changed)
+        // Apply pending history (loaded from DB on scroll-up) before updating render rows
         let window_width = f32::from(bounds.size.width);
+        self.apply_pending_history(window_width);
+
+        // Update render rows (incremental if width unchanged, full rebuild if changed)
         self.update_render_rows(window_width);
         self.apply_pending_scroll();
+
+        // Check if user scrolled near top and trigger history load if needed
+        self.try_load_history(cx);
 
         {
             let mut selected = self.selected_user.borrow_mut();

@@ -34,7 +34,9 @@ impl MainView {
                                     self.danmu_list.push_back(DisplayMessage::Danmu(danmu, ts));
                                 }
                                 while self.danmu_list.len() > MAX_DANMU_COUNT {
-                                    self.danmu_list.pop_front();
+                                    if let Some(msg) = self.danmu_list.pop_front() {
+                                        self.history_msgs.push_back(msg);
+                                    }
                                 }
                                 list_modified = true;
                                 self.scroll_to_bottom();
@@ -48,6 +50,11 @@ impl MainView {
 
                     if is_new_room {
                         self.live_status = live_status;
+                        self.history_msgs.clear();
+                        self.history_cursor = None;
+                        self.history_exhausted = false;
+                        self.loading_history = false;
+                        self.pending_history_entries = None;
                     }
 
                     // Update tray state
@@ -63,7 +70,9 @@ impl MainView {
                         self.danmu_list.push_back(DisplayMessage::Danmu(danmu, ts));
                         if should_auto_scroll {
                             while self.danmu_list.len() > MAX_DANMU_COUNT {
-                                self.danmu_list.pop_front();
+                                if let Some(msg) = self.danmu_list.pop_front() {
+                                    self.history_msgs.push_back(msg);
+                                }
                             }
                             self.scroll_to_bottom();
                         }
@@ -78,7 +87,9 @@ impl MainView {
                             .push_back(DisplayMessage::Interact(interact, ts));
                         if should_auto_scroll {
                             while self.danmu_list.len() > MAX_DANMU_COUNT {
-                                self.danmu_list.pop_front();
+                                if let Some(msg) = self.danmu_list.pop_front() {
+                                    self.history_msgs.push_back(msg);
+                                }
                             }
                             self.scroll_to_bottom();
                         }
@@ -100,7 +111,9 @@ impl MainView {
                             .push_back(DisplayMessage::EntryEffect(entry, ts));
                         if should_auto_scroll {
                             while self.danmu_list.len() > MAX_DANMU_COUNT {
-                                self.danmu_list.pop_front();
+                                if let Some(msg) = self.danmu_list.pop_front() {
+                                    self.history_msgs.push_back(msg);
+                                }
                             }
                             self.scroll_to_bottom();
                         }
@@ -113,7 +126,9 @@ impl MainView {
                     self.danmu_list.push_back(DisplayMessage::Gift(gift, ts));
                     if should_auto_scroll {
                         while self.danmu_list.len() > MAX_DANMU_COUNT {
-                            self.danmu_list.pop_front();
+                            if let Some(msg) = self.danmu_list.pop_front() {
+                                self.history_msgs.push_back(msg);
+                            }
                         }
                         self.scroll_to_bottom();
                     }
@@ -125,7 +140,9 @@ impl MainView {
                     self.danmu_list.push_back(DisplayMessage::Guard(guard, ts));
                     if should_auto_scroll {
                         while self.danmu_list.len() > MAX_DANMU_COUNT {
-                            self.danmu_list.pop_front();
+                            if let Some(msg) = self.danmu_list.pop_front() {
+                                self.history_msgs.push_back(msg);
+                            }
                         }
                         self.scroll_to_bottom();
                     }

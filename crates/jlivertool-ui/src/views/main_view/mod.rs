@@ -29,7 +29,7 @@ use crate::views::SettingView;
 use gpui::*;
 use jlivertool_core::database::Database;
 use jlivertool_core::events::Event;
-use jlivertool_core::messages::SuperChatMessage;
+use jlivertool_core::messages::{HistoryEntry, SuperChatMessage};
 use jlivertool_core::types::RoomId;
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -41,6 +41,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 const MAX_DANMU_COUNT: usize = 200;
+const HISTORY_PAGE_SIZE: usize = 100;
+const SCROLL_NEAR_TOP_THRESHOLD: usize = 5;
 
 /// Main window view state
 pub struct MainView {
@@ -57,6 +59,16 @@ pub struct MainView {
     online_count: u64,
     connected: bool,
     danmu_list: VecDeque<DisplayMessage>,
+    /// Historical messages loaded from DB (prepended before live messages on scroll-up)
+    history_msgs: VecDeque<DisplayMessage>,
+    /// Earliest timestamp loaded from history (cursor for next page)
+    history_cursor: Option<i64>,
+    /// True when the DB has returned an empty page (no more history)
+    history_exhausted: bool,
+    /// Guard against concurrent history loads
+    loading_history: bool,
+    /// History entries loaded from DB, waiting to be applied during render
+    pending_history_entries: Option<(u64, Vec<HistoryEntry>)>,
     /// User nicknames (uid → custom name) — wrapped in Rc so it can be cheaply
     /// cloned into each `DanmuListItemView` per frame.
     pub(super) nicknames: Rc<HashMap<u64, String>>,
@@ -326,6 +338,11 @@ impl MainView {
             online_count: 0,
             connected: false,
             danmu_list: VecDeque::with_capacity(MAX_DANMU_COUNT),
+            history_msgs: VecDeque::new(),
+            history_cursor: None,
+            history_exhausted: false,
+            loading_history: false,
+            pending_history_entries: None,
             nicknames: Rc::new(HashMap::new()),
             floating_sc: Vec::new(),
             render_rows: Rc::new(Vec::new()),
@@ -525,10 +542,180 @@ impl MainView {
         (self.fold_lookback as u16).max(5) * 5
     }
 
-    /// Fully rebuild render_rows from danmu_list for the given window width.
+    /// Row height for a single danmu list item (must match DanmuListItemView::row_height).
+    fn item_height(&self) -> f32 {
+        if self.lite_mode {
+            self.font_size + 6.0
+        } else {
+            self.font_size + 10.0
+        }
+    }
+
+    /// Index of the first visible row in render_rows.
+    fn visible_top_row_index(&self) -> usize {
+        let scroll_state = self.scroll_handle.0.borrow();
+        let offset = scroll_state.base_handle.offset();
+        let item_height = self.item_height();
+        let offset_y: f32 = (-offset.y).into();
+        if offset_y > 0.0 && item_height > 0.0 {
+            (offset_y / item_height) as usize
+        } else {
+            0
+        }
+    }
+
+    /// Check if the user has scrolled near the top and trigger a history load if needed.
+    fn try_load_history(&mut self, cx: &mut Context<Self>) {
+        if self.loading_history || self.history_exhausted {
+            return;
+        }
+        if self.room.is_none() || self.database.is_none() {
+            return;
+        }
+        if self.render_rows.is_empty() {
+            return;
+        }
+
+        // Only trigger when user has actually scrolled up (not just at top of a short list)
+        if self.is_at_bottom() {
+            return;
+        }
+
+        let top_visible = self.visible_top_row_index();
+        if top_visible > SCROLL_NEAR_TOP_THRESHOLD {
+            return;
+        }
+
+        let before_ts = self.history_cursor.unwrap_or_else(|| {
+            // If no cursor yet, use the oldest message timestamp (check history first, then live)
+            self.history_msgs
+                .front()
+                .or(self.danmu_list.front())
+                .map(|m| message_timestamp(m))
+                .unwrap_or_else(|| chrono::Utc::now().timestamp())
+        });
+
+        let db = self.database.clone();
+        let rid = self.room.as_ref().unwrap().real_id();
+        self.loading_history = true;
+
+        cx.spawn(
+            async move |this: WeakEntity<MainView>, cx: &mut AsyncApp| {
+                let result = db
+                    .as_ref()
+                    .unwrap()
+                    .get_messages_before(rid, before_ts, HISTORY_PAGE_SIZE as u32);
+                let _ = cx.update(|cx| {
+                    this.update(cx, |view, _cx| {
+                        view.on_history_loaded(rid, result);
+                    })
+                });
+            },
+        )
+        .detach();
+    }
+
+    /// Called from the async task when history data arrives from the DB.
+    fn on_history_loaded(&mut self, request_room: u64, result: anyhow::Result<Vec<HistoryEntry>>) {
+        self.loading_history = false;
+
+        // Discard if user switched rooms while the query was in-flight
+        if self.room.as_ref().map(|r| r.real_id()) != Some(request_room) {
+            return;
+        }
+
+        match result {
+            Ok(entries) if !entries.is_empty() => {
+                self.pending_history_entries = Some((request_room, entries));
+            }
+            Ok(_) => {
+                self.history_exhausted = true;
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load history: {}", e);
+            }
+        }
+    }
+
+    /// Apply pending history entries: prepend to history_msgs, rebuild render_rows,
+    /// and preserve scroll position so the visible content doesn't jump.
+    pub(super) fn apply_pending_history(&mut self, window_width: f32) {
+        let (load_room, entries) = match self.pending_history_entries.take() {
+            Some(e) => e,
+            None => return,
+        };
+
+        // Discard if room changed since the load was requested
+        if self.room.as_ref().map(|r| r.real_id()) != Some(load_room) {
+            return;
+        }
+
+        // Record pixel-precise scroll offset before modification
+        let old_offset = self.scroll_handle.0.borrow().base_handle.offset();
+        let item_height = self.item_height();
+        let old_render_len = self.render_rows.len();
+
+        // Update cursor to the earliest timestamp in this batch
+        if let Some(earliest) = entries.last() {
+            self.history_cursor = Some(earliest.timestamp());
+        }
+
+        // Convert to DisplayMessage (entries are DESC by timestamp; reverse to chronological)
+        for entry in entries.into_iter().rev() {
+            let msg = match entry {
+                HistoryEntry::Danmu(d, ts) => DisplayMessage::Danmu(d, ts),
+                HistoryEntry::Gift(g) => {
+                    let ts = g.timestamp;
+                    DisplayMessage::Gift(g, ts)
+                }
+                HistoryEntry::Guard(g) => {
+                    let ts = g.timestamp;
+                    DisplayMessage::Guard(g, ts)
+                }
+            };
+            self.history_msgs.push_front(msg);
+        }
+
+        // Force full rebuild (history was prepended)
+        self.last_render_width = 0.0;
+        self.render_rows_source_count = 0;
+        self.rebuild_render_rows(window_width);
+
+        // Pixel-precise scroll preservation: shift offset by exact height of prepended rows
+        let new_render_len = self.render_rows.len();
+        let prepended_rows = new_render_len.saturating_sub(old_render_len);
+        let prepend_height = px(item_height * prepended_rows as f32);
+        let new_offset = point(old_offset.x, old_offset.y - prepend_height);
+        self.scroll_handle
+            .0
+            .borrow()
+            .base_handle
+            .set_offset(new_offset);
+
+        // Cancel any pending scroll-to-bottom — user is scrolling through history
+        self.pending_scroll_to_bottom = false;
+    }
+
+    /// Fully rebuild render_rows from danmu_list (and history_msgs) for the given window width.
     fn rebuild_render_rows(&mut self, window_width: f32) {
         let mut rows = Vec::new();
         let available_width = window_width - 14.0; // scrollbar buffer
+
+        // Process history messages first (oldest at front)
+        for msg in self.history_msgs.iter() {
+            if !self.try_fold_last(&mut rows, msg) {
+                Self::append_message_rows(
+                    &mut rows,
+                    msg,
+                    available_width,
+                    self.font_size,
+                    self.lite_mode,
+                    self.medal_display,
+                    &self.nicknames,
+                );
+            }
+        }
+        // Then live messages
         for msg in self.danmu_list.iter() {
             if !self.try_fold_last(&mut rows, msg) {
                 Self::append_message_rows(
@@ -544,30 +731,38 @@ impl MainView {
         }
         self.render_rows = Rc::new(rows);
         self.last_render_width = window_width;
-        self.render_rows_source_count = self.danmu_list.len();
+        self.render_rows_source_count = self.history_msgs.len() + self.danmu_list.len();
     }
 
     /// Incrementally append new messages to render_rows.
     fn append_new_render_rows(&mut self, window_width: f32) {
-        let current_source_len = self.danmu_list.len();
+        let history_len = self.history_msgs.len();
+        let total_source = history_len + self.danmu_list.len();
 
-        // If items were removed from front (MAX_DANMU_COUNT), full rebuild needed
-        if current_source_len < self.render_rows_source_count {
+        // If items were removed (shouldn't happen normally), full rebuild
+        if total_source < self.render_rows_source_count {
             self.rebuild_render_rows(window_width);
             return;
         }
 
         // Nothing new to add
-        if current_source_len == self.render_rows_source_count {
+        if total_source == self.render_rows_source_count {
             return;
         }
 
+        // If history was modified, full rebuild (simpler than incremental merge)
+        if history_len > 0 && self.render_rows_source_count < history_len {
+            self.rebuild_render_rows(window_width);
+            return;
+        }
+
+        // New items are at the end of danmu_list
         let available_width = window_width - 14.0;
         let mut rows = Rc::try_unwrap(std::mem::replace(&mut self.render_rows, Rc::new(Vec::new())))
             .unwrap_or_else(|rc| (*rc).clone());
 
-        let new_start = self.render_rows_source_count;
-        for i in new_start..current_source_len {
+        let danmu_new_start = self.render_rows_source_count.saturating_sub(history_len);
+        for i in danmu_new_start..self.danmu_list.len() {
             let msg = &self.danmu_list[i];
             if !self.try_fold_last(&mut rows, msg) {
                 Self::append_message_rows(
@@ -583,7 +778,7 @@ impl MainView {
         }
 
         self.render_rows = Rc::new(rows);
-        self.render_rows_source_count = current_source_len;
+        self.render_rows_source_count = total_source;
     }
 
     /// Convert a single DisplayMessage into one or more RenderRows and append them.
