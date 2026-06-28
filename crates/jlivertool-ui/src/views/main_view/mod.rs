@@ -494,27 +494,35 @@ impl MainView {
         }
     }
 
-    /// Try to fold `msg` into a recent equivalent Full row within the timeout window
+    /// Try to fold `msg` into a recent equivalent Full row within the timeout window.
     fn try_fold_last(&self, rows: &mut Vec<RenderRow>, msg: &DisplayMessage) -> bool {
         let cur_ts = message_timestamp(msg);
-        let mut checked = 0u8;
+        let mut checked = 0u16;
+        // anchor_ts is not monotonic when scanning backwards — a group folded into
+        // later in time can have a newer anchor_ts than rows added after it.
         for i in (0..rows.len()).rev() {
             if let RenderRow::Full(ref mut existing, ref mut count, ref mut anchor_ts) = rows[i] {
-                if cur_ts - *anchor_ts > self.fold_timeout as i64 {
+                checked += 1;
+                if checked > self.max_fold_scan() {
                     return false;
+                }
+                let age = cur_ts - *anchor_ts;
+                if age > self.fold_timeout as i64 {
+                    continue;
                 }
                 if are_messages_equivalent(existing, msg) {
                     *count += 1;
                     *anchor_ts = cur_ts;
                     return true;
                 }
-                checked += 1;
-                if checked >= self.fold_lookback {
-                    return false;
-                }
             }
         }
         false
+    }
+
+    /// Ceiling on Full-row scan depth to prevent O(n²) when fold_timeout is huge.
+    fn max_fold_scan(&self) -> u16 {
+        (self.fold_lookback as u16).max(5) * 5
     }
 
     /// Fully rebuild render_rows from danmu_list for the given window width.
